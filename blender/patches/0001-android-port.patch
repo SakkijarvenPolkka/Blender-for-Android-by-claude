@@ -152,6 +152,20 @@ index 5401870..a3a8240 100644
  #define VMA_LEAK_LOG_FORMAT(format, ...) \
    do { \
      fprintf(stderr, "VMA: " format "\n", __VA_ARGS__); \
+diff --git a/intern/cycles/kernel/osl/shaders/CMakeLists.txt b/intern/cycles/kernel/osl/shaders/CMakeLists.txt
+index 29977b3..6d08d6f 100644
+--- a/intern/cycles/kernel/osl/shaders/CMakeLists.txt
++++ b/intern/cycles/kernel/osl/shaders/CMakeLists.txt
+@@ -183,7 +183,8 @@ foreach(_file ${SRC_OSL})
+     OUTPUT ${_OSO_FILE}
+     COMMAND
+       ${CMAKE_COMMAND} -E env ${PLATFORM_ENV_BUILD}
+-      ${OSL_COMPILER} -q -O2
++      # When cross-compiling, `oslc` is run through an emulator (e.g. QEMU for Android).
++      ${CMAKE_CROSSCOMPILING_EMULATOR} ${OSL_COMPILER} -q -O2
+         -I"${CMAKE_CURRENT_SOURCE_DIR}"
+         -I"${OSL_SHADER_DIR}"
+         -o ${_OSO_FILE}
 diff --git a/intern/ghost/CMakeLists.txt b/intern/ghost/CMakeLists.txt
 index 8c3e57e..37c816b 100644
 --- a/intern/ghost/CMakeLists.txt
@@ -907,21 +921,23 @@ index a2c9056..127de8f 100644
    /* Passed in from the build-systems 'PYTHON_EXECUTABLE'. */
    const char *python_build_def = STRINGIFY(PYTHON_EXECUTABLE_NAME);
 diff --git a/source/blender/blenkernel/intern/blendfile.cc b/source/blender/blenkernel/intern/blendfile.cc
-index d2eb290..f09db58 100644
+index d2eb290..51e6367 100644
 --- a/source/blender/blenkernel/intern/blendfile.cc
 +++ b/source/blender/blenkernel/intern/blendfile.cc
-@@ -1534,6 +1534,10 @@ UserDef *BKE_blendfile_userdef_from_defaults()
+@@ -1534,6 +1534,12 @@ UserDef *BKE_blendfile_userdef_from_defaults()
          "cycles",
          "pose_library",
          "bl_pkg",
 +#ifdef __ANDROID__
 +        /* Remote control by AI assistants (the server is started by the user). */
 +        "mcp_server",
++        /* Optional components installed after the application (USD Python modules, pip). */
++        "android_components",
 +#endif
      };
      for (int i = 0; i < ARRAY_SIZE(addons); i++) {
        bAddon *addon = BKE_addon_new();
-@@ -1558,6 +1562,15 @@ UserDef *BKE_blendfile_userdef_from_defaults()
+@@ -1558,6 +1564,15 @@ UserDef *BKE_blendfile_userdef_from_defaults()
    userdef->flag &= ~USER_SCRIPT_AUTOEXEC_DISABLE;
  #endif
  

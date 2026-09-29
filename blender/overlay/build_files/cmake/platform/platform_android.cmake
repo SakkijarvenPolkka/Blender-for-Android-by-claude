@@ -338,10 +338,29 @@ if(WITH_OPENIMAGEDENOISE)
   endif()
 endif()
 
+# Open Shading Language, static with LLVM & Clang (linked through OSL's targets), see
+# `deps/cmake/libs_osl.cmake` of the Android port. `oslc` is an Android executable too, it's run
+# through `CMAKE_CROSSCOMPILING_EMULATOR` to compile Cycles' shaders.
+if(WITH_CYCLES AND WITH_CYCLES_OSL)
+  set(OSL_ROOT ${LIBDIR})
+  # Static OSL links pugixml as `pugixml::pugixml` (the target of pugixml's configuration is
+  # `pugixml`).
+  if(NOT TARGET pugixml::pugixml)
+    if(NOT TARGET pugixml)
+      find_package(pugixml CONFIG REQUIRED)
+    endif()
+    add_library(pugixml::pugixml INTERFACE IMPORTED)
+    set_target_properties(pugixml::pugixml PROPERTIES INTERFACE_LINK_LIBRARIES pugixml)
+  endif()
+  find_package_wrapper(OSL 1.13.4)
+  set_and_warn_library_found("OSL" OSL_FOUND WITH_CYCLES_OSL)
+  mark_as_advanced(OSL_DIR)
+endif()
+
 # Features that are not available (yet) on Android.
 foreach(_option
     WITH_OPENAL WITH_JACK WITH_PULSEAUDIO WITH_PIPEWIRE
-    WITH_INPUT_NDOF WITH_CYCLES_OSL WITH_HYDRA WITH_LLVM
+    WITH_INPUT_NDOF WITH_HYDRA
     WITH_XR_OPENXR WITH_TRACY
     WITH_GHOST_X11 WITH_GHOST_WAYLAND WITH_SYSTEM_AUDASPACE)
   if(${_option})
@@ -379,6 +398,13 @@ set(PLATFORM_CFLAGS "-pipe -fPIC -funsigned-char -fno-strict-aliasing -ffp-contr
 # All symbols except the JNI entry points and `SDL_main` are hidden.
 set(PLATFORM_SYMBOLS_MAP ${CMAKE_SOURCE_DIR}/source/creator/symbols_android.map)
 set(PLATFORM_LINKFLAGS_SYMBOL_HIDING "-Wl,--version-script='${PLATFORM_SYMBOLS_MAP}'")
+# `libblender.so` is loaded by the Java side, not as a dependency of the executable like on other
+# platforms. As a global library (`DF_1_GLOBAL`) its symbols take precedence over the copies in
+# libraries loaded later (Python extension modules): e.g. the RTTI of a template instantiated in
+# a module is the one of `libblender.so`, as types are compared by address with libc++.
+string(APPEND PLATFORM_LINKFLAGS_SYMBOL_HIDING " -Wl,-z,global")
+# Calls within `libblender.so` to its exported functions stay direct (not through the PLT).
+string(APPEND PLATFORM_LINKFLAGS_SYMBOL_HIDING " -Wl,-Bsymbolic-functions")
 
 set(PLATFORM_ENV_BUILD "_DUMMY_ENV_VAR_=1")
 set(PLATFORM_ENV_INSTALL "_DUMMY_ENV_VAR_=1")

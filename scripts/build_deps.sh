@@ -36,6 +36,7 @@ cmake -G Ninja -S "${REPO_DIR}/deps" -B "${DEPS_BUILD_DIR}" \
   -DLIBDIR="${LIBDIR}" \
   -DDOWNLOAD_DIR="${DOWNLOAD_DIR}" \
   -DHOST_PYTHON_PREFIX="${HOST_PYTHON_PREFIX}" \
+  -DQEMU_AARCH64="${QEMU_AARCH64}" \
   -DDEPS_JOBS="${JOBS}"
 
 # Marks the dependencies that are installed (that ninja wouldn't build again), see

@@ -53,4 +53,20 @@ log "Installing to ${BLENDER_INSTALL_DIR}"
 rm -rf "${BLENDER_INSTALL_DIR}"
 cmake --install "${BLENDER_BUILD_DIR}"
 
+# Identifies this build for optional components with native code (`android_components` add-on),
+# which are linked against `libblender.so`: the dependencies, Blender's sources & patches.
+abi="$( (cat "${LIBDIR}/.deps_hash" 2>/dev/null; echo "${BLENDER_VERSION}"; \
+  cat "${REPO_DIR}/blender/patches/"*.patch "${REPO_DIR}/blender/android_config.cmake"; \
+  find "${REPO_DIR}/blender/overlay" -type f -print0 | sort -z | xargs -0 cat) | sha256sum | cut -c1-16)"
+mkdir -p "${BLENDER_INSTALL_DIR}/${BLENDER_VERSION_SHORT}/datafiles/android"
+cat > "${BLENDER_INSTALL_DIR}/${BLENDER_VERSION_SHORT}/datafiles/android/build_info.json" <<EOF
+{
+  "blender_version": "${BLENDER_VERSION}",
+  "port_revision": ${PORT_REVISION},
+  "repository": "${BLENDER_ANDROID_REPOSITORY}",
+  "release_tag": "${RELEASE_TAG}",
+  "abi": "${abi}"
+}
+EOF
+
 log "Done: ${BLENDER_INSTALL_DIR}/lib/libblender.so"

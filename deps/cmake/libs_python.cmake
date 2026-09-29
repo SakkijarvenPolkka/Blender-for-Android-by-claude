@@ -182,3 +182,27 @@ add_dependencies(external_python
   external_ssl
   external_expat
 )
+
+# ---------------------------------------------------------------------------
+# Python bindings of the C++ libraries (OpenImageIO, OSL's `oslquery`): built like the other
+# extension modules (`libs_python_packages.cmake`) with the Android Python of
+# `CROSS_PYTHON_DIR`, linked against its stand-in library (`libblender.so`, which provides
+# Python) and installed in Python's `site-packages`.
+
+set(CROSS_PYTHON_DIR ${CMAKE_BINARY_DIR}/cross_python)
+
+add_cmake_dep(pybind11 PYBIND11
+  CMAKE_ARGS
+    -DPYBIND11_TEST=OFF
+    -DPYBIND11_NOPYTHON=ON
+)
+
+set(PYBIND11_MODULE_CMAKE_ARGS
+  -DUSE_PYTHON=ON
+  -DPYTHON_VERSION=${PYTHON_SHORT_VERSION}
+  -Dpybind11_ROOT=${LIBDIR}
+  -DPython3_EXECUTABLE=${CROSS_PYTHON_DIR}/bin/python3
+  -DPython3_INCLUDE_DIR=${LIBDIR}/include/python${PYTHON_SHORT_VERSION}
+  -DPython3_LIBRARY=${CROSS_PYTHON_DIR}/lib/libpython${PYTHON_SHORT_VERSION}.so
+  "-DCMAKE_MODULE_LINKER_FLAGS=-L${CROSS_PYTHON_DIR}/lib -lpython${PYTHON_SHORT_VERSION}"
+)

@@ -52,3 +52,15 @@ jobs:
       stage: 2
       deps-cache-key: ${{ needs.deps-1.outputs.cache-key }}
       last-stage: true
+
+  # Optional components (USD's Python modules), linked against the `libblender.so` of the APK.
+  components:
+    needs: [deps-1, blender-1, blender-2]
+    if: >-
+      !cancelled() &&
+      (needs.blender-1.outputs.complete == 'true' || needs.blender-2.outputs.complete == 'true')
+    permissions:
+      contents: write
+    uses: ./.github/workflows/components.yml
+    with:
+      deps-cache-key: ${{ needs.deps-1.outputs.cache-key }}

@@ -11,6 +11,34 @@ global:
   Py*;
   _Py*;
   blender_android_*;
+
+  /* USD's Python modules (an optional component) are linked against `libblender.so`: USD, the
+   * libraries its API uses (TBB, MaterialX) and the C++ run-time (a single run-time for
+   * exceptions & RTTI across the libraries, with the type information of all types), as
+   * mangled names. */
+  *pxrBlender_v*;
+  *MaterialX_v*;
+  _ZN3tbb*;
+  _ZNK3tbb*;
+  _ZTVN3tbb*;
+  _ZNSt*;
+  _ZNKSt*;
+  _ZSt*;
+  _ZTVSt*;
+  _ZTVNSt*;
+  _ZTTNSt*;
+  _ZThn*;
+  _ZTv*;
+  _Znw*;
+  _Zna*;
+  _Zdl*;
+  _Zda*;
+  _ZTI*;
+  _ZTS*;
+  _ZTVN10__cxxabiv1*;
+  __cxa_*;
+  __gxx_personality_v0;
+  __dynamic_cast;
 local:
   *;
 };

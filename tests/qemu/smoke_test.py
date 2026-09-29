@@ -7,9 +7,11 @@ Smoke test for the Android build of Blender, run in background mode:
 Exercises Python (standard library extension modules, bundled packages), modeling (OpenSubdiv,
 Manifold booleans), file I/O (.blend, OBJ, PLY, STL, glTF with Draco & meshoptimizer
 compression, FBX, Alembic, USD, image formats through OpenImageIO), color management (OpenColorIO),
-rendering with Cycles on the CPU (Embree, path guiding, OpenImageDenoise), volumes (OpenVDB),
-video encoding & decoding (FFmpeg), audio files (libsndfile, FFmpeg) and time stretching
-(Rubberband).
+rendering with Cycles on the CPU (Embree, path guiding, OpenImageDenoise, Open Shading Language),
+volumes (OpenVDB), video encoding & decoding (FFmpeg), audio files (libsndfile, FFmpeg), time
+stretching (Rubberband) and the optional components (`android_components` add-on): with
+`BLENDER_ANDROID_COMPONENTS` pointing to the components of the build (`scripts/build_components.sh`),
+USD's Python modules are installed from their archive and used.
 """
 
 import glob
@@ -190,6 +192,11 @@ def main():
     scene.cycles.use_guiding = False
     scene.cycles.use_denoising = False
 
+    # Open Shading Language: a script node compiled in Blender (OSL compiler, Clang's
+    # preprocessor) and JIT-compiled for rendering (LLVM).
+    check(_cycles.with_osl, "Cycles with_osl")
+    osl_render(scene, output_dir)
+
     # Video through FFmpeg: render short animations and read them back.
     scene.cycles.samples = 1
     scene.frame_start = 1
@@ -301,7 +308,127 @@ def main():
     bpy.ops.wm.usd_import(filepath=os.path.join(output_dir, "scene.usdc"))
     check(len(bpy.data.objects) > objects, "import USD: {:d} object(s)".format(len(bpy.data.objects) - objects))
 
+    optional_components(output_dir)
+
     log("ALL TESTS PASSED")
+
+
+def osl_render(scene, output_dir):
+    import cycles.osl
+
+    text = bpy.data.texts.new("red_emission.osl")
+    text.write(
+        "shader red_emission(output closure color Emission = 0)\n"
+        "{\n"
+        "    Emission = color(1.0, 0.0, 0.0) * emission();\n"
+        "}\n"
+    )
+    material = bpy.data.materials.new("OSL")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    nodes.clear()
+    script = nodes.new("ShaderNodeScript")
+    script.mode = 'INTERNAL'
+    script.script = text
+    errors = []
+    cycles.osl.update_script_node(
+        script, lambda kind, message: errors.append(message) if 'ERROR' in kind else None)
+    check(not errors and "Emission" in script.outputs, "OSL: compile script node")
+    output = nodes.new("ShaderNodeOutputMaterial")
+    material.node_tree.links.new(script.outputs["Emission"], output.inputs["Surface"])
+
+    saved = {}
+    for obj in scene.objects:
+        if obj.type == 'MESH':
+            saved[obj.name] = [slot.material for slot in obj.material_slots]
+            obj.data.materials.clear()
+            obj.data.materials.append(material)
+    # Only the emission of the OSL shader: black world, no view transform.
+    world = scene.world
+    scene.world = None
+    view_transform = scene.view_settings.view_transform
+    scene.view_settings.view_transform = 'Standard'
+
+    scene.cycles.shading_system = True
+    scene.render.image_settings.file_format = 'PNG'
+    path = os.path.join(output_dir, "render_osl.png")
+    scene.render.filepath = path
+    start = time.time()
+    bpy.ops.render.render(write_still=True)
+    elapsed = time.time() - start
+    scene.cycles.shading_system = False
+
+    image = bpy.data.images.load(path)
+    pixels = list(image.pixels)
+    red = sum(pixels[0::4])
+    green = sum(pixels[1::4])
+    bpy.data.images.remove(image)
+    check(red > 10.0 and red > 10.0 * green, "OSL render ({:.1f}s): red {:.1f}, green {:.1f}".format(
+        elapsed, red, green))
+
+    for name, materials in saved.items():
+        mesh = bpy.data.objects[name].data
+        mesh.materials.clear()
+        for mat in materials:
+            mesh.materials.append(mat)
+    scene.world = world
+    scene.view_settings.view_transform = view_transform
+
+
+def optional_components(output_dir):
+    import addon_utils
+    import json
+
+    addon_utils.enable("android_components", default_set=True)
+    import android_components
+    check(android_components.components.build_info().get("abi"), "Android components: build info")
+
+    components_dir = os.environ.get("BLENDER_ANDROID_COMPONENTS", "")
+    if not components_dir:
+        log("skipped: optional components (BLENDER_ANDROID_COMPONENTS not set)")
+        return
+    with open(os.path.join(components_dir, "components.json"), encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    check(manifest["abi"] == android_components.components.build_info()["abi"],
+          "components made for this build ({:s})".format(manifest["abi"]))
+    usd_python = next(item for item in manifest["components"] if item["id"] == "usd-python")
+    start = time.time()
+    message = android_components.install_file(os.path.join(components_dir, usd_python["file"]))
+    check("usd-python" in android_components.installed(), "{:s} ({:.1f}s)".format(message, time.time() - start))
+
+    # USD's Python API, with the USD library of Blender.
+    from pxr import Usd, UsdGeom, Sdf, Gf, Vt
+    stage = Usd.Stage.CreateInMemory()
+    sphere = UsdGeom.Sphere.Define(stage, "/World/Sphere")
+    sphere.GetRadiusAttr().Set(2.0)
+    UsdGeom.XformCommonAPI(sphere).SetTranslate(Gf.Vec3d(1.0, 2.0, 3.0))
+    points = UsdGeom.Mesh.Define(stage, "/World/Mesh").CreatePointsAttr(
+        Vt.Vec3fArray([Gf.Vec3f(0.0, 0.0, 0.0), Gf.Vec3f(1.0, 0.0, 0.0), Gf.Vec3f(0.0, 1.0, 0.0)]))
+    check(len(points.Get()) == 3 and isinstance(points.Get()[1], Gf.Vec3f), "pxr: Vt arrays of Gf vectors")
+    usda = stage.GetRootLayer().ExportToString()
+    check("def Sphere" in usda and "radius = 2" in usda, "pxr: create a stage")
+    path = os.path.join(output_dir, "pxr.usda")
+    stage.GetRootLayer().Export(path)
+    check(Sdf.Layer.FindOrOpen(path) is not None, "pxr: save & open a layer")
+
+    # A file exported by Blender (same USD library, plug-ins registered by Blender).
+    stage = Usd.Stage.Open(os.path.join(output_dir, "scene.usdc"))
+    meshes = [prim for prim in stage.Traverse() if prim.IsA(UsdGeom.Mesh)]
+    check(meshes, "pxr: read Blender's USD export ({:d} meshes)".format(len(meshes)))
+
+    # Errors of USD (TfError) and of the bindings (C++ exceptions) as Python exceptions.
+    for function, expected in (
+            (lambda: Usd.Stage.Open(os.path.join(output_dir, "missing.usda")), "ErrorException"),
+            (lambda: Gf.Vec3f("x"), "ArgumentError")):
+        try:
+            function()
+            raised = "nothing"
+        except Exception as ex:
+            raised = type(ex).__name__
+        check(raised == expected, "pxr: {:s} raised".format(raised))
+
+    android_components.remove("usd-python")
+    check("usd-python" not in android_components.installed(), "remove a component")
 
 
 main()

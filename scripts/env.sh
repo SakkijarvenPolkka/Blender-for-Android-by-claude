@@ -19,6 +19,16 @@ DEPS_BUILD_DIR="${DEPS_BUILD_DIR:-${WORK_DIR}/build/deps}"
 LIBDIR="${LIBDIR:-${WORK_DIR}/android_arm64_libs}"
 BLENDER_BUILD_DIR="${BLENDER_BUILD_DIR:-${WORK_DIR}/build/blender}"
 BLENDER_INSTALL_DIR="${BLENDER_INSTALL_DIR:-${WORK_DIR}/install/blender}"
+# Optional components installed after the application (`scripts/build_components.sh`).
+COMPONENTS_BUILD_DIR="${COMPONENTS_BUILD_DIR:-${WORK_DIR}/build/components}"
+COMPONENTS_OUT_DIR="${COMPONENTS_OUT_DIR:-${WORK_DIR}/out/components}"
+
+# Revision of the port for this Blender version (part of the APK version) and where releases are
+# published (the application downloads optional components from the release of its version,
+# `v<BLENDER_VERSION>-android.<PORT_REVISION>`).
+PORT_REVISION="${PORT_REVISION:-1}"
+BLENDER_ANDROID_REPOSITORY="${BLENDER_ANDROID_REPOSITORY:-${GITHUB_REPOSITORY:-SakkijarvenPolkka/Blender-for-Android-by-claude}}"
+RELEASE_TAG="${RELEASE_TAG:-v${BLENDER_VERSION}-android.${PORT_REVISION}}"
 
 # Android toolchain.
 #

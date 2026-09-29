@@ -2,8 +2,6 @@
 #
 # Compression, image, color-management and general purpose libraries.
 
-set(BLENDER_PATCH_DIR ${BLENDER_SOURCE_DIR}/build_files/build_environment/patches)
-
 # NOTE: some projects always build shared libraries as well, those are removed
 # after installing so that everything links statically into `libblender.so`.
 
@@ -274,7 +272,7 @@ add_cmake_dep(openimageio OPENIMAGEIO
   DEPENDS
     external_png external_jpeg external_tiff external_webp external_openjpeg
     external_openexr external_fmt external_robinmap external_pugixml external_tbb
-    external_opencolorio external_zlib
+    external_opencolorio external_zlib external_pybind11 external_cross_python
   PATCHES
     ${BLENDER_PATCH_DIR}/openimageio.diff
     ${BLENDER_PATCH_DIR}/openimageio_dds_3d_5133.diff
@@ -287,7 +285,8 @@ add_cmake_dep(openimageio OPENIMAGEIO
     -DUSE_DCMTK=OFF
     -DUSE_TBB=ON
     -DUSE_QT=OFF
-    -DUSE_PYTHON=OFF
+    # The Python module (`import OpenImageIO`, as in Blender releases), see `libs_python.cmake`.
+    ${PYBIND11_MODULE_CMAKE_ARGS}
     -DUSE_GIF=OFF
     -DUSE_OPENCV=OFF
     -DUSE_OPENJPEG=ON

@@ -47,6 +47,15 @@ This server controls a running Blender {version} ({platform}) through its Python
 - NumPy is available (`import numpy`).
 """
 
+# Optional components of the Android port (`android_components` add-on).
+INSTRUCTIONS_ANDROID = """- On Android, optional components are installed after the application with the
+  `android_components` module (enabled by default): `android_components.available()` lists
+  them, `android_components.install("usd-python")` installs USD's Python API
+  (`from pxr import Usd`), `android_components.pip_install(["package"])` installs Python
+  packages (pure Python or Android wheels). Downloads need online access
+  (`bpy.app.online_access`, Preferences > System > Network).
+"""
+
 
 class _Job:
     __slots__ = ("function", "done", "result", "error", "cancelled")
@@ -475,4 +484,7 @@ def create_tools() -> list[Tool]:
 
 
 def instructions() -> str:
-    return INSTRUCTIONS.format(version=bpy.app.version_string, platform=sys.platform)
+    text = INSTRUCTIONS.format(version=bpy.app.version_string, platform=sys.platform)
+    if sys.platform == "android":
+        text += INSTRUCTIONS_ANDROID
+    return text

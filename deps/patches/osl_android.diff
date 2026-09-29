@@ -1,0 +1,31 @@
+--- a/src/shaders/CMakeLists.txt
++++ b/src/shaders/CMakeLists.txt
+@@ -28,7 +28,7 @@
+     endforeach ()
+     list (APPEND oslc_args "-I${CMAKE_SOURCE_DIR}/src/shaders")
+     add_custom_command (OUTPUT ${osofile}
+-        COMMAND $<TARGET_FILE_DIR:oslc>/$<TARGET_FILE_NAME:oslc> ${oslc_args} "${oslfile}" -o "${osofile}"
++        COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE_DIR:oslc>/$<TARGET_FILE_NAME:oslc> ${oslc_args} "${oslfile}" -o "${osofile}"
+         MAIN_DEPENDENCY ${oslfile}
+         DEPENDS ${_shader_DEPENDS} "${stdosl_header}" oslc
+         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+--- a/src/libbsdl/bsdl.cmake
++++ b/src/libbsdl/bsdl.cmake
+@@ -17,7 +17,7 @@
+     target_link_libraries(genluts PRIVATE BSDL_BOOTSTRAP Threads::Threads)
+     file(MAKE_DIRECTORY ${BSDL_GEN_HEADERS}/BSDL/SPI)
+     file(MAKE_DIRECTORY ${BSDL_GEN_HEADERS}/BSDL/MTX)
+-    add_custom_command(TARGET genluts POST_BUILD USES_TERMINAL COMMAND $<TARGET_FILE:genluts> ${BSDL_GEN_HEADERS}/BSDL
++    add_custom_command(TARGET genluts POST_BUILD USES_TERMINAL COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:genluts> ${BSDL_GEN_HEADERS}/BSDL
+                     COMMENT "Generating BSDL lookup tables ...")
+ 
+     if (DEFINED bsdl_SPECTRAL_COLOR_SPACES)
+@@ -29,7 +29,7 @@
+             add_custom_command(
+                 OUTPUT ${JACOBHANIKA_${CS}}
+                 USES_TERMINAL
+-                COMMAND $<TARGET_FILE:jakobhanika_luts> 64 ${JACOBHANIKA_${CS}} ${CS}
++                COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} $<TARGET_FILE:jakobhanika_luts> 64 ${JACOBHANIKA_${CS}} ${CS}
+                 DEPENDS jakobhanika_luts
+                 COMMENT "Generating Jakob-Hanika RGB-Spectrum ${CS} tables")
+         endforeach()

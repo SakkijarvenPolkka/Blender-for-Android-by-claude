@@ -42,7 +42,10 @@ set(WITH_PYTHON_SECURITY ON CACHE BOOL "" FORCE)
 
 # Rendering.
 set(WITH_CYCLES ON CACHE BOOL "" FORCE)
-set(WITH_CYCLES_OSL OFF CACHE BOOL "" FORCE)
+# Open Shading Language (script nodes, OSL shading system), JIT-compiled with LLVM.
+set(WITH_CYCLES_OSL ON CACHE BOOL "" FORCE)
+# LLVM is linked through OSL, Blender doesn't use it directly.
+set(WITH_LLVM OFF CACHE BOOL "" FORCE)
 set(WITH_CYCLES_EMBREE ON CACHE BOOL "" FORCE)
 set(WITH_CYCLES_PATH_GUIDING ON CACHE BOOL "" FORCE)
 set(WITH_CYCLES_DEVICE_CUDA OFF CACHE BOOL "" FORCE)

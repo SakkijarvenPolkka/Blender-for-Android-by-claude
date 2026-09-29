@@ -9,7 +9,6 @@
 # (see `cross_python.cmake`).
 
 set(PYTHON_TARGET_SITE_PACKAGES ${LIBDIR}/lib/python${PYTHON_SHORT_VERSION}/site-packages)
-set(CROSS_PYTHON_DIR ${CMAKE_BINARY_DIR}/cross_python)
 set(CROSS_PYTHON ${CROSS_PYTHON_DIR}/bin/python3)
 
 # ---------------------------------------------------------------------------
@@ -57,6 +56,8 @@ ExternalProject_Add(external_python_site_packages
     fastjsonschema==${FASTJSONSCHEMA_VERSION}
     typing-extensions==${TYPING_EXTENSIONS_VERSION}
     tomli-w==${TOMLI_W_VERSION}
+    # Python packages installed after the application (`android_components` add-on).
+    pip==${PYTHON_PIP_VERSION}
   LOG_INSTALL ON
   LOG_OUTPUT_ON_FAILURE ON
 )

@@ -34,6 +34,8 @@ jobs:
       complete: ${{ steps.result.outputs.complete }}
     env:
       WORK_DIR: ${{ github.workspace }}/_work
+      # Release the application downloads its optional components from (tags `v*`).
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
       CCACHE_DIR: ${{ github.workspace }}/_work/ccache
       CCACHE_MAXSIZE: 3G
       CCACHE_COMPRESS: "1"
@@ -121,6 +123,25 @@ jobs:
         with:
           name: blender-android-arm64-apk
           path: _work/out/*.apk
+          if-no-files-found: error
+
+      # The optional components (`components.yml`) are linked against this `libblender.so`.
+      - name: Files for the components
+        if: steps.build.outputs.status == '0'
+        run: |
+          source scripts/env.sh
+          mkdir -p _work/components-input
+          "${ANDROID_TOOLCHAIN_DIR}/bin/llvm-strip" -o _work/components-input/libblender.so \
+            "${BLENDER_BUILD_DIR}/lib/libblender.so"
+          cp "${BLENDER_INSTALL_DIR}/${BLENDER_VERSION_SHORT}/datafiles/android/build_info.json" \
+            _work/components-input/
+
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outputs.status == '0'
+        with:
+          name: blender-android-components-input
+          path: _work/components-input
+          retention-days: 3
           if-no-files-found: error
 
       - name: Release

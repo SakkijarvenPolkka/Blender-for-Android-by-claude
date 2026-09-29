@@ -10,7 +10,9 @@ if(NOT BLENDER_SOURCE_DIR OR NOT EXISTS "${BLENDER_SOURCE_DIR}/build_files/build
 endif()
 
 # Patches of the Android port (`deps/patches`).
-set(ANDROID_PATCH_DIR ${CMAKE_SOURCE_DIR}/patches)
+get_filename_component(ANDROID_PATCH_DIR ${CMAKE_CURRENT_LIST_DIR}/../patches ABSOLUTE)
+# Patches of Blender's own dependency builds.
+set(BLENDER_PATCH_DIR ${BLENDER_SOURCE_DIR}/build_files/build_environment/patches)
 
 set(ANDROID_TOOLCHAIN_FILE "${ANDROID_NDK}/build/cmake/android.toolchain.cmake")
 set(ANDROID_TOOLCHAIN_DIR "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64")

@@ -71,7 +71,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build qemu-user-static autoconf automake libtool pkg-config \
-            patch zip unzip libssl-dev zlib1g-dev libffi-dev
+            patch zip unzip libssl-dev zlib1g-dev libffi-dev flex bison
 
       - uses: actions/setup-java@v4
         if: steps.cache.outputs.cache-hit != 'true'

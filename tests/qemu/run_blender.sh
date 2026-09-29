@@ -44,6 +44,18 @@ fi
 log "Blender --version"
 run_blender --version
 
+# Optional components made for this build (scripts/build_components.sh) are tested too.
+if python3 - "${COMPONENTS_OUT_DIR}/components.json" \
+    "${BLENDER_INSTALL_DIR}/${BLENDER_VERSION_SHORT}/datafiles/android/build_info.json" <<'EOF' 2>/dev/null
+import json, sys
+components, build_info = (json.load(open(path)) for path in sys.argv[1:3])
+sys.exit(components["abi"] != build_info["abi"])
+EOF
+then
+  export BLENDER_ANDROID_COMPONENTS="${COMPONENTS_OUT_DIR}"
+  log "Testing the optional components in ${COMPONENTS_OUT_DIR}"
+fi
+
 log "Smoke test (background mode)"
 run_blender --background --factory-startup -noaudio \
   --python "${REPO_DIR}/tests/qemu/smoke_test.py" -- "${TEST_DIR}/output" 2>&1 | tee "${TEST_DIR}/smoke_test.log"
