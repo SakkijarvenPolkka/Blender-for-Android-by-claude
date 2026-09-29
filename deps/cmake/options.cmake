@@ -90,6 +90,13 @@ if(EXISTS ${DOWNLOAD_DIR}/unverified.txt)
   file(STRINGS ${DOWNLOAD_DIR}/unverified.txt DEPS_UNVERIFIED_FILES)
 endif()
 
+# Blender's mirror of the dependency sources (same files and checksums), tried when the
+# upstream server can't be reached (e.g. gmplib.org from GitHub Actions runners).
+file(STRINGS ${CMAKE_CURRENT_LIST_DIR}/../../BLENDER_VERSION _blender_version LIMIT_COUNT 1)
+string(REGEX MATCH "^[0-9]+\\.[0-9]+" _blender_version "${_blender_version}")
+set(DEPS_SOURCE_MIRROR
+  "https://projects.blender.org/blender/lib-source/media/branch/blender-v${_blender_version}-release")
+
 # Sets `out` to the ExternalProject download arguments of dependency `prefix`.
 function(dep_download_args prefix out)
   set(_file ${${prefix}_FILE})
@@ -97,7 +104,7 @@ function(dep_download_args prefix out)
     set(_args URL file://${DOWNLOAD_DIR}/${_file})
   else()
     set(_args
-      URL ${${prefix}_URI}
+      URL ${${prefix}_URI} ${DEPS_SOURCE_MIRROR}/${_file}
       URL_HASH ${${prefix}_HASH_TYPE}=${${prefix}_HASH}
       DOWNLOAD_NAME ${_file}
       DOWNLOAD_DIR ${DOWNLOAD_DIR}
