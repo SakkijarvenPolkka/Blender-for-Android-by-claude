@@ -18,7 +18,7 @@ See "Build" below.*
 
 | 항목 | 상태 |
 | --- | --- |
-| 의존성 크로스 컴파일 (Python 3.13, OIIO, OCIO, OpenEXR, TBB, shaderc, SDL3, OpenSubdiv, Manifold, GMP, FFTW …) | ✅ 빌드 확인 |
+| 의존성 크로스 컴파일 (Python 3.13, OIIO, OCIO, OpenEXR, TBB, shaderc, SDL3, OpenSubdiv, Manifold, GMP, FFTW, FFmpeg, OpenVDB, Embree, OIDN …) | ✅ 빌드 확인 |
 | Blender 5.2.2 → `libblender.so` (arm64-v8a, API 31, 16KB 페이지 정렬) | ✅ 빌드·링크 확인 |
 | Android bionic 위에서 백그라운드 모드 실행 (QEMU, 아래 "검증") | ✅ 스모크 테스트 통과 |
 | NumPy 2.3, requests 등 Python 패키지, 확장(Extensions) 온라인 설치 | ✅ QEMU에서 확인 |
@@ -50,22 +50,28 @@ GPU(Vulkan) 경로와 터치·펜 입력은 에뮬레이션으로 확인할 수 
 ### 지원 기능
 
 - **UI / 3D 뷰포트**: Vulkan 백엔드 (Workbench, EEVEE)
-- **렌더링**: Cycles (CPU, ARM NEON), EEVEE
+- **렌더링**: Cycles (CPU, ARM NEON) — Embree 레이 트레이싱, 경로 가이딩(OpenPGL), AI 디노이즈(OpenImageDenoise), EEVEE
 - **Python**: CPython 3.13 (표준 라이브러리 + `ssl`, `sqlite3`, `ctypes` 등), 공식 Blender와 같은 번들 패키지:
   **NumPy 2.3**, requests, certifi, cattrs, autopep8 등 / `aud`(오디오) 모듈
 - **확장(Extensions)**: extensions.blender.org에서 애드온 검색·설치 (환경설정 → 시스템 → 네트워크에서 온라인 접근 허용),
   원격 에셋 라이브러리·온라인 Essentials
 - **Claude 연동**: 내장 MCP 서버 애드온 — Claude Code나 Claude 앱이 Blender Python API를 사용 (아래 참고)
-- **입출력**: .blend, OBJ, PLY, STL, FBX, glTF/GLB, SVG / 이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
+- **입출력**: .blend, OBJ, PLY, STL, FBX, glTF/GLB(Draco·meshoptimizer 압축), Alembic, SVG, Grease Pencil PDF /
+  이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
+- **동영상 (FFmpeg)**: 공식 릴리스와 같은 코덱 — H.264(x264), H.265(x265), VP9, AV1, Theora / AAC, Opus, Vorbis,
+  MP3, FLAC. 애니메이션을 동영상으로 렌더링, 동영상 편집기(VSE), 동영상 클립 불러오기
+- **모션 트래킹**: 동영상 클립 트래킹·카메라 솔브 (libmv, Ceres)
+- **볼륨**: OpenVDB/NanoVDB — .vdb 불러오기·저장, 메시 ↔ 볼륨, Cycles 볼륨 렌더링
 - **모델링**: OpenSubdiv, Boolean(Manifold/Exact), Remesh, QuadriFlow, 물리(Bullet), 유체(Mantaflow), 오션
-- **오디오**: SDL3 (AAudio / OpenSL ES)
+- **텍스트**: HarfBuzz·FriBidi (복잡한 문자·오른쪽에서 왼쪽으로 쓰는 문자)
+- **오디오**: SDL3 (AAudio / OpenSL ES), 오디오 파일 읽기·쓰기 (libsndfile, FFmpeg)
 - **파일 열기**: 파일 관리자에서 `.blend` 파일 열기 지원
 
 ### 아직 지원하지 않는 기능
 
-OpenVDB(볼륨), Alembic, USD, MaterialX, FFmpeg(동영상), OpenImageDenoise, Embree, 모션 트래킹(libmv) — 순차적으로
-추가 중입니다. OpenXR, Cycles GPU 렌더링(모바일 GPU용 Cycles 백엔드 없음), 여러 개의 창(환경설정·파일 브라우저·렌더
-결과는 메인 창 안에서 열림), 네이티브 라이브러리(glibc용 wheel)를 포함한 일부 확장은 지원하지 않습니다.
+USD·MaterialX(작업 중), OSL(Open Shading Language, LLVM 필요), Rubberband(오디오 피치/속도), OpenXR,
+Cycles GPU 렌더링(모바일 GPU용 Cycles 백엔드 없음), 여러 개의 창(환경설정·파일 브라우저·렌더 결과는 메인 창
+안에서 열림), 네이티브 라이브러리(glibc용 wheel)를 포함한 일부 확장은 지원하지 않습니다.
 
 ---
 

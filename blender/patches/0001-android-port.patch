@@ -1238,7 +1238,7 @@ index 4c0aa2c..9077d57 100644
    if (UNLIKELY(g_system == nullptr)) {
      /* GHOST will have reported the back-ends that failed to load. */
 diff --git a/source/creator/CMakeLists.txt b/source/creator/CMakeLists.txt
-index 985b969..5fd1dff 100644
+index 985b969..9c3a28b 100644
 --- a/source/creator/CMakeLists.txt
 +++ b/source/creator/CMakeLists.txt
 @@ -149,6 +149,18 @@ set(SRC
@@ -1260,7 +1260,7 @@ index 985b969..5fd1dff 100644
  if(CMAKE_GENERATOR MATCHES "^Visual Studio.+")
    # This helps visual studio find the debugger visualizers
    list(APPEND SRC ${CMAKE_SOURCE_DIR}/tools/utils_ide/natvis/Blender.natvis)
-@@ -334,6 +346,16 @@ if(WITH_PYTHON_MODULE)
+@@ -334,6 +346,22 @@ if(WITH_PYTHON_MODULE)
      )
    endif()
  
@@ -1274,10 +1274,16 @@ index 985b969..5fd1dff 100644
 +      "LINKER:--whole-archive" "${PYTHON_LIBRARY}" "LINKER:--no-whole-archive"
 +    )
 +  endif()
++  if(WITH_USD)
++    # All of the static USD library: types & plug-ins are registered by static initializers.
++    target_link_options(blender PRIVATE
++      "LINKER:--whole-archive" "${USD_LIBRARY}" "LINKER:--no-whole-archive"
++    )
++  endif()
  else()
    add_executable(blender ${EXETYPE} ${SRC})
    if(WITH_CPU_CHECK)
-@@ -500,7 +522,8 @@ if(WITH_PYTHON)
+@@ -500,7 +528,8 @@ if(WITH_PYTHON)
    # The glTF add-on's draco & meshopt bridge libraries, loaded at run-time by `io_scene_gltf2`.
    # Portable Linux builds place them in `lib` beside their bundled dependencies (found via each
    # target's `$ORIGIN` RPATH); otherwise beside the add-on where `library.py` looks for them.
@@ -1287,7 +1293,7 @@ index 985b969..5fd1dff 100644
      set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_LIB}")
    else()
      set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_VER_LIBS}/scripts/addons_core/io_scene_gltf2")
-@@ -750,7 +773,39 @@ endfunction()
+@@ -750,7 +779,39 @@ endfunction()
  # -----------------------------------------------------------------------------
  # Install Targets (Platform Specific)
  
@@ -1328,6 +1334,23 @@ index 985b969..5fd1dff 100644
  
    if(PLATFORM_BUNDLED_LIBRARIES AND TARGETDIR_LIB)
      install(
+@@ -1994,6 +2055,16 @@ if((DEFINED LIBDIR) AND TARGETDIR_LIB)
+         DESTINATION ${TARGETDIR_LIB}
+       )
+       install(DIRECTORY ${LIBDIR}/usd/plugin/usd/ DESTINATION "blender.shared/usd")
++    elseif(ANDROID)
++      # Linked statically, the plug-in resources are found through `PXR_PLUGINPATH_NAME`
++      # (see `creator_android.cc`).
++      install(DIRECTORY
++        ${USD_LIBRARY_DIR}/usd
++        DESTINATION "${TARGETDIR_VER}/datafiles"
++      )
++      if(EXISTS ${LIBDIR}/plugin/usd/)
++        install(DIRECTORY ${LIBDIR}/plugin/usd/ DESTINATION "${TARGETDIR_VER}/datafiles/usd")
++      endif()
+     elseif(USD_PYTHON_SUPPORT)
+       install(DIRECTORY
+         ${USD_LIBRARY_DIR}/usd
 diff --git a/source/creator/creator.cc b/source/creator/creator.cc
 index 4253893..c4db20f 100644
 --- a/source/creator/creator.cc

@@ -6,9 +6,10 @@ Smoke test for the Android build of Blender, run in background mode:
 
 Exercises Python (standard library extension modules, bundled packages), modeling (OpenSubdiv,
 Manifold booleans), file I/O (.blend, OBJ, PLY, STL, glTF with Draco & meshoptimizer
-compression, FBX, Alembic, image formats through OpenImageIO), color management (OpenColorIO),
+compression, FBX, Alembic, USD, image formats through OpenImageIO), color management (OpenColorIO),
 rendering with Cycles on the CPU (Embree, path guiding, OpenImageDenoise), volumes (OpenVDB),
-video encoding & decoding (FFmpeg) and audio files (libsndfile, FFmpeg).
+video encoding & decoding (FFmpeg), audio files (libsndfile, FFmpeg) and time stretching
+(Rubberband).
 """
 
 import glob
@@ -93,6 +94,10 @@ def main():
         tone.write(path, 48000, aud.CHANNELS_MONO, aud.FORMAT_S16, container, codec)
         samples = aud.Sound(path).data()
         check(abs(len(samples) - 24000) < 4800, "audio {:s}: {:d} samples".format(extension, len(samples)))
+    # Time stretching (Rubberband).
+    check(hasattr(tone, "timeStretchPitchScale"), "aud with Rubberband")
+    stretched = tone.timeStretchPitchScale(2.0, 1.0).data()
+    check(abs(len(stretched) - 48000) < 4800, "time stretch x2: {:d} samples".format(len(stretched)))
 
     scene = bpy.context.scene
     cube = bpy.data.objects["Cube"]
@@ -275,6 +280,19 @@ def main():
     objects = len(bpy.data.objects)
     bpy.ops.wm.alembic_import(filepath=abc_path)
     check(len(bpy.data.objects) > objects, "import Alembic: {:d} object(s)".format(len(bpy.data.objects) - objects))
+
+    # USD (static library, with MaterialX shading networks).
+    for extension in ("usdc", "usda"):
+        usd_path = os.path.join(output_dir, "scene." + extension)
+        bpy.ops.wm.usd_export(filepath=usd_path, export_materials=True, generate_materialx_network=True)
+        check(os.path.exists(usd_path) and os.path.getsize(usd_path) > 0, "export USD ({:s})".format(extension))
+    with open(os.path.join(output_dir, "scene.usda"), encoding="utf-8") as fh:
+        usda = fh.read()
+    check('def Mesh "' in usda, "USD: meshes")
+    check("mtlx" in usda, "USD: MaterialX network")
+    objects = len(bpy.data.objects)
+    bpy.ops.wm.usd_import(filepath=os.path.join(output_dir, "scene.usdc"))
+    check(len(bpy.data.objects) > objects, "import USD: {:d} object(s)".format(len(bpy.data.objects) - objects))
 
     log("ALL TESTS PASSED")
 

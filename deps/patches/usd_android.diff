@@ -1,0 +1,40 @@
+--- a/cmake/macros/Public.cmake
++++ b/cmake/macros/Public.cmake
+@@ -427,7 +427,10 @@
+         LIB_INSTALL_PREFIX_RESULT libInstallPrefix
+     )
+ 
+-    if(PXR_ENABLE_PYTHON_SUPPORT AND (args_PYMODULE_CPPFILES OR args_PYMODULE_FILES OR args_PYSIDE_UI_FILES))
++    # PXR_BUILD_PYTHON_MODULES=OFF: the libraries support Python (for an application embedding
++    # Python and linking USD statically) but the Python modules are not built.
++    if(PXR_ENABLE_PYTHON_SUPPORT AND (NOT DEFINED PXR_BUILD_PYTHON_MODULES OR PXR_BUILD_PYTHON_MODULES)
++       AND (args_PYMODULE_CPPFILES OR args_PYMODULE_FILES OR args_PYSIDE_UI_FILES))
+         list(APPEND pythonModuleIncludeDirs ${PYTHON_INCLUDE_DIRS})
+ 
+         _pxr_python_module(
+--- a/pxr/base/arch/daemon.cpp
++++ b/pxr/base/arch/daemon.cpp
+@@ -40,7 +40,12 @@
+ 
+     if (limits.rlim_cur == RLIM_INFINITY)
+     {
++#if defined(NOFILE)
+         maxfd = NOFILE;
++#else
++        // Not defined by Android's C library.
++        maxfd = 1024;
++#endif
+     }
+     else
+     {
+--- a/pxr/base/arch/stackTrace.cpp
++++ b/pxr/base/arch/stackTrace.cpp
+@@ -704,7 +704,7 @@
+ nonLockingExecv(const char *path, char *const argv[])
+ {
+ #if defined(ARCH_OS_LINUX)
+-     return nonLockingLinux__execve (path, argv, __environ);
++     return nonLockingLinux__execve (path, argv, environ);
+ #else
+      return execv(path, argv);
+ #endif

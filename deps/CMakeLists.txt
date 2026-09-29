@@ -41,6 +41,7 @@ include(cmake/libs_media.cmake)
 include(cmake/libs_misc.cmake)
 include(cmake/libs_render.cmake)
 include(cmake/libs_scene.cmake)
+include(cmake/libs_usd.cmake)
 
 add_dependencies(external_shaderc external_python_host)
 

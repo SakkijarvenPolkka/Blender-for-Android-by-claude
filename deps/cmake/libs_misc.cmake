@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
 # Text shaping (HarfBuzz, FriBidi), PDF export (libharu), glTF mesh compression (Draco,
-# meshoptimizer) and the solver used for motion tracking (Ceres with Abseil).
+# meshoptimizer), the solver used for motion tracking (Ceres with Abseil) and Rubberband.
 
 # Meson cross file for C/C++ libraries (dependencies found with pkg-config).
 set(MESON_LIBS_CROSS_FILE ${CMAKE_BINARY_DIR}/meson-android-libs.ini)
@@ -138,3 +138,30 @@ add_cmake_dep(ceres CERES
     -DLAPACK=OFF
     -DPROVIDE_UNINSTALL_TARGET=OFF
 )
+
+# ---------------------------------------------------------------------------
+# Audio time stretching & pitch shifting (sequencer sound strips).
+
+dep_download_args(RUBBERBAND _dl)
+ExternalProject_Add(external_rubberband
+  ${_dl}
+  PREFIX ${CMAKE_BINARY_DIR}/rubberband
+  PATCH_COMMAND patch -p1 -N -i ${BLENDER_PATCH_DIR}/rubberband_remove_dll_exports.diff
+    COMMAND patch -p1 -N -i ${BLENDER_PATCH_DIR}/rubberband_missing_cstdlib.diff
+  CONFIGURE_COMMAND ${MESON_ENV} ${MESON} setup
+    --cross-file ${MESON_LIBS_CROSS_FILE}
+    --prefix ${LIBDIR}
+    --libdir lib
+    --buildtype release
+    -Dauto_features=disabled
+    -Ddefault_library=static
+    -Dfft=fftw
+    <BINARY_DIR> <SOURCE_DIR>
+  BUILD_COMMAND ninja -C <BINARY_DIR> -j${DEPS_JOBS}
+  INSTALL_COMMAND ninja -C <BINARY_DIR> install
+  LOG_CONFIGURE ON
+  LOG_BUILD ON
+  LOG_INSTALL ON
+  LOG_OUTPUT_ON_FAILURE ON
+)
+add_dependencies(external_rubberband external_fftw3_double external_python_host_tools)

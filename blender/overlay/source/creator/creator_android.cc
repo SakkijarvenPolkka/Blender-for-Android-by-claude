@@ -127,6 +127,15 @@ int main(int argc, char *argv[])
     log_redirect_init();
   }
 
+  /* USD is linked statically (no library directory to find its plug-ins from), its plug-in
+   * resources are installed with the data files. */
+  const char *resources = getenv("BLENDER_SYSTEM_RESOURCES");
+  if (resources != nullptr && getenv("PXR_PLUGINPATH_NAME") == nullptr) {
+    char usd_path[4096];
+    snprintf(usd_path, sizeof(usd_path), "%s/datafiles/usd", resources);
+    setenv("PXR_PLUGINPATH_NAME", usd_path, 0);
+  }
+
   /* SDL passes the arguments given by `SDLActivity.getArguments()`
    * (`argv[0]` is "app_process"). */
   return blender_android_main(argc, const_cast<const char **>(argv));

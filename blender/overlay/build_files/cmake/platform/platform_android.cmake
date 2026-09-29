@@ -33,7 +33,7 @@ foreach(_root
     OPENEXR IMATH OPENJPH OPENIMAGEIO OPENCOLORIO JPEG PNG ZLIB ZSTD EPOXY FMT FREETYPE BROTLI
     PYTHON OPENJPEG SDL FFTW3 WEBP PUGIXML TBB GMP POTRACE OPENSUBDIV VULKAN SHADERC
     SSE2NEON EIGEN3 MANIFOLD FFMPEG LIBSNDFILE HARFBUZZ FRIBIDI HARU OPENVDB NANOVDB BLOSC
-    ALEMBIC EMBREE OPENIMAGEDENOISE USD)
+    ALEMBIC EMBREE OPENIMAGEDENOISE USD RUBBERBAND)
   set(${_root}_ROOT_DIR ${LIBDIR})
 endforeach()
 unset(_root)
@@ -132,6 +132,15 @@ endif()
 if(WITH_CODEC_SNDFILE)
   find_package_wrapper(SndFile)
   set_and_warn_library_found("libsndfile" SNDFILE_FOUND WITH_CODEC_SNDFILE)
+  if(SNDFILE_FOUND)
+    # Static library, with the codec libraries it uses.
+    foreach(_lib FLAC vorbisenc vorbis ogg opus mp3lame)
+      find_library_static(SNDFILE_${_lib}_LIBRARY NAMES ${_lib} HINTS ${LIBDIR}/lib REQUIRED)
+      mark_as_advanced(SNDFILE_${_lib}_LIBRARY)
+      list(APPEND LIBSNDFILE_LIBRARIES ${SNDFILE_${_lib}_LIBRARY})
+    endforeach()
+    unset(_lib)
+  endif()
 endif()
 
 if(WITH_CODEC_FFMPEG)
@@ -252,6 +261,11 @@ if(WITH_MESHOPTIMIZER)
   mark_as_advanced(meshoptimizer_DIR)
 endif()
 
+if(WITH_RUBBERBAND)
+  find_package_wrapper(Rubberband)
+  set_and_warn_library_found("Rubberband" RUBBERBAND_FOUND WITH_RUBBERBAND)
+endif()
+
 # Volumes.
 if(WITH_OPENVDB)
   find_package(OpenVDB)
@@ -278,6 +292,19 @@ if(WITH_MATERIALX)
   find_package_wrapper(MaterialX)
   set_and_warn_library_found("MaterialX" MaterialX_FOUND WITH_MATERIALX)
   mark_as_advanced(MaterialX_DIR)
+endif()
+
+# Universal Scene Description: a static library with Python support (through the embedded
+# Python), linked with all its members (see `source/creator`).
+if(WITH_USD)
+  find_package_wrapper(USD)
+  set_and_warn_library_found("USD" USD_FOUND WITH_USD)
+  if(USD_FOUND)
+    if(WITH_MATERIALX AND MaterialX_FOUND)
+      list(APPEND USD_LIBRARIES MaterialXGenShader MaterialXFormat MaterialXCore)
+    endif()
+    list(APPEND USD_LIBRARIES ${OPENSUBDIV_LIBRARIES} ${TBB_LIBRARIES})
+  endif()
 endif()
 
 # Cycles on the CPU (NEON).
@@ -314,8 +341,8 @@ endif()
 # Features that are not available (yet) on Android.
 foreach(_option
     WITH_OPENAL WITH_JACK WITH_PULSEAUDIO WITH_PIPEWIRE
-    WITH_INPUT_NDOF WITH_CYCLES_OSL WITH_USD WITH_HYDRA WITH_LLVM
-    WITH_XR_OPENXR WITH_RUBBERBAND WITH_TRACY
+    WITH_INPUT_NDOF WITH_CYCLES_OSL WITH_HYDRA WITH_LLVM
+    WITH_XR_OPENXR WITH_TRACY
     WITH_GHOST_X11 WITH_GHOST_WAYLAND WITH_SYSTEM_AUDASPACE)
   if(${_option})
     message(STATUS "${_option} is not supported on Android, disabling")
