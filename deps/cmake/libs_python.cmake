@@ -165,6 +165,8 @@ ExternalProject_Add(external_python
       <BINARY_DIR>/Modules/_decimal/libmpdec/libmpdec.a
       <BINARY_DIR>/Modules/_hacl/libHacl_Hash_SHA2.a
       ${LIBDIR}/lib/
+    COMMAND ${CMAKE_COMMAND} -DPYTHON_LIBDIR=${LIBDIR}/lib/python${PYTHON_SHORT_VERSION}
+      -P ${CMAKE_CURRENT_LIST_DIR}/fix_python_sysconfig.cmake
   LOG_CONFIGURE ON
   LOG_BUILD ON
   LOG_INSTALL ON

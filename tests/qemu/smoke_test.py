@@ -50,7 +50,8 @@ def main():
     import zlib
     import decimal
     import _ctypes  # noqa: F401
-    check(hashlib.sha256(b"blender").hexdigest().startswith("48c9"), "hashlib (OpenSSL)")
+    check(hashlib.sha256(b"abc").hexdigest().startswith("ba7816bf8f01cfea"), "hashlib (OpenSSL)")
+    check(hashlib.sha512(b"abc").hexdigest().startswith("ddaf35a193617aba"), "hashlib (sha512)")
     check(ssl.OPENSSL_VERSION.startswith("OpenSSL"), "ssl: " + ssl.OPENSSL_VERSION)
     check(sqlite3.connect(":memory:").execute("select 1").fetchone()[0] == 1, "sqlite3")
     check(lzma.decompress(lzma.compress(b"x" * 100)) == b"x" * 100, "lzma")

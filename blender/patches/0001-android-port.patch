@@ -754,11 +754,28 @@ index 57eb769..bd8854d 100644
  
  #include "gpu_compute_evaluator.h"
  
+diff --git a/scripts/addons_core/bl_pkg/__init__.py b/scripts/addons_core/bl_pkg/__init__.py
+index c563730..9e221ba 100644
+--- a/scripts/addons_core/bl_pkg/__init__.py
++++ b/scripts/addons_core/bl_pkg/__init__.py
+@@ -577,7 +577,11 @@ def _remote_asset_library_restore_backups() -> None:
+     if not bpy.context.preferences.experimental.use_remote_asset_libraries:
+         return
+ 
+-    from _bpy_internal.assets.remote_library import listing_downloader
++    try:
++        from _bpy_internal.assets.remote_library import listing_downloader
++    except ImportError:
++        # Downloading is unsupported on this platform (e.g. Android, without `multiprocessing`).
++        return
+ 
+     for asset_lib in bpy.context.preferences.filepaths.asset_libraries:
+         if not asset_lib.enabled:
 diff --git a/source/blender/blenkernel/intern/blendfile.cc b/source/blender/blenkernel/intern/blendfile.cc
-index d2eb290..2ac380b 100644
+index d2eb290..f5746f6 100644
 --- a/source/blender/blenkernel/intern/blendfile.cc
 +++ b/source/blender/blenkernel/intern/blendfile.cc
-@@ -1558,6 +1558,15 @@ UserDef *BKE_blendfile_userdef_from_defaults()
+@@ -1558,6 +1558,18 @@ UserDef *BKE_blendfile_userdef_from_defaults()
    userdef->flag &= ~USER_SCRIPT_AUTOEXEC_DISABLE;
  #endif
  
@@ -769,6 +786,9 @@ index d2eb290..2ac380b 100644
 +  userdef->preferences_display_type = USER_TEMP_SPACE_DISPLAY_FULLSCREEN;
 +  /* Applications can be terminated at any time while in the background, save more often. */
 +  userdef->savetime = 1;
++  /* Downloading assets relies on Python's `multiprocessing` (not available on Android),
++   * use the Essentials assets bundled with Blender. */
++  userdef->asset_flag &= ~USER_ASSETS_USE_ONLINE_ESSENTIALS;
 +#endif
 +
    /* System-specific fonts directory.
