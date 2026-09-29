@@ -18,9 +18,25 @@ See "Build" below.*
 | 항목 | 상태 |
 | --- | --- |
 | 의존성 크로스 컴파일 (Python 3.13, OIIO, OCIO, OpenEXR, TBB, shaderc, SDL3, OpenSubdiv, Manifold, GMP, FFTW …) | ✅ 빌드 확인 |
-| Blender 5.2.2 → `libblender.so` (arm64-v8a, API 31) | 빌드 진행/검증 결과는 아래 "검증" 참고 |
-| APK 패키징 (Gradle, 데이터 자동 설치, 터치 툴바) | ✅ |
-| 실제 기기(Galaxy S22)에서의 실행 | ⚠️ **실기기 테스트 전** — GPU 드라이버 호환성은 기기에서 확인 필요 |
+| Blender 5.2.2 → `libblender.so` (arm64-v8a, API 31, 16KB 페이지 정렬) | ✅ 빌드·링크 확인 |
+| Android bionic 위에서 백그라운드 모드 실행 (QEMU, 아래 "검증") | ✅ 스모크 테스트 통과 |
+| APK 패키징 (Gradle, 데이터 자동 설치, 터치 툴바) | ✅ 약 170MB APK 생성 확인 |
+| 실제 기기(Galaxy S22)에서 UI 실행 (SDL3 창, Vulkan, 터치 입력) | ⚠️ **실기기 테스트 전** — GPU 드라이버 호환성은 기기에서 확인 필요 |
+
+### 검증
+
+실기기 없이 확인할 수 있는 부분은 빌드 머신에서 검증합니다. `tests/qemu/run_blender.sh`는 빌드된
+`libblender.so`를 QEMU user-mode 에뮬레이션과 Android 14 에뮬레이터 이미지에서 추출한 bionic
+(`linker64`, `libc.so` …)으로 실행하고, 앱과 같은 방식(`SDL_main` 호출)으로 Blender를 시작합니다.
+CI에서도 매 빌드마다 실행됩니다.
+
+- `blender --version` → `Blender 5.2.2 LTS`
+- 스모크 테스트 (`tests/qemu/smoke_test.py`, 백그라운드 모드): Python 표준 라이브러리 확장 모듈
+  (`ssl`/OpenSSL 3.5, `hashlib`, `sqlite3`, `lzma`, `bz2`, `zlib`, `decimal`, `ctypes`), OpenSubdiv 서브디비전,
+  Boolean(Manifold/Exact), .blend 저장·불러오기, OBJ/PLY/STL 내보내기, Cycles CPU 렌더링 → PNG/EXR/JPEG/WebP,
+  OpenImageIO 이미지 읽기, OpenColorIO(AgX) — **모두 통과**
+
+GPU(Vulkan) 경로와 터치·펜 입력은 에뮬레이션으로 확인할 수 없어 실기기 테스트가 필요합니다.
 
 실기기에서 문제가 있으면 `adb logcat -s Blender SDL BlenderLauncher` 로그와 함께 이슈를 남겨 주세요.
 
@@ -29,15 +45,18 @@ See "Build" below.*
 - **UI / 3D 뷰포트**: Vulkan 백엔드 (Workbench, EEVEE)
 - **렌더링**: Cycles (CPU, ARM NEON), EEVEE
 - **Python**: CPython 3.13 (표준 라이브러리 + `ssl`, `sqlite3`, `ctypes` 등 확장 모듈 정적 링크)
-- **입출력**: .blend, OBJ, PLY, STL, FBX, glTF, SVG / 이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
+- **입출력**: .blend, OBJ, PLY, STL, FBX(가져오기), SVG / 이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
 - **모델링**: OpenSubdiv, Boolean(Manifold/Exact), Remesh, QuadriFlow, 물리(Bullet), 유체(Mantaflow), 오션
 - **오디오**: SDL3 (AAudio / OpenSL ES)
 - **파일 열기**: 파일 관리자에서 `.blend` 파일 열기 지원
 
 ### 아직 지원하지 않는 기능
 
-OpenVDB(볼륨), Alembic, USD, MaterialX, FFmpeg(동영상), NumPy, OpenImageDenoise, Embree, 모션 트래킹(libmv),
-OpenXR, Cycles GPU 렌더링, 여러 개의 창(환경설정·파일 브라우저·렌더 결과는 메인 창 안에서 열리도록 기본 설정됨).
+OpenVDB(볼륨), Alembic, USD, MaterialX, FFmpeg(동영상), NumPy(glTF 가져오기·내보내기, FBX 내보내기 등 NumPy를
+쓰는 애드온 포함), OpenImageDenoise, Embree, 모션 트래킹(libmv),
+OpenXR, Cycles GPU 렌더링, 여러 개의 창(환경설정·파일 브라우저·렌더 결과는 메인 창 안에서 열리도록 기본 설정됨),
+온라인 확장(Extensions)·원격 에셋 라이브러리 다운로드(Android용 Python에는 `multiprocessing`이 없고 별도 Python
+프로세스를 실행할 수 없음 — 내장 Essentials 에셋은 사용 가능).
 
 ---
 
@@ -59,7 +78,7 @@ OpenXR, Cycles GPU 렌더링, 여러 개의 창(환경설정·파일 브라우�
 화면 위쪽의 **떠 있는 툴바**: ⌨ 가상 키보드(단축키 입력용), Esc, Tab, Ctrl/Shift/Alt(토글), 실행 취소/다시 실행,
 Del, 뷰(앞/옆/위/카메라/원근 전환/선택 항목 보기). 왼쪽 ☰ 손잡이로 이동(드래그)하거나 접을(탭) 수 있습니다.
 
-- 첫 실행 시 Blender 데이터(약 200MB)를 내부 저장소에 설치합니다 (업데이트 후에도 한 번).
+- 첫 실행 시 Blender 데이터(약 160MB)를 내부 저장소에 설치합니다 (업데이트 후에도 한 번).
 - "모든 파일 접근" 권한을 허용하면 기기의 모든 폴더에서 .blend 파일을 열고 저장할 수 있습니다.
 - UI 크기는 Blender의 *환경설정 → 인터페이스 → 해상도 배율*로 조절합니다.
 - 앱이 백그라운드로 전환될 때 자동 저장(복구 파일)을 기록합니다. *파일 → 복구 → 자동 저장*으로 복원할 수 있습니다.

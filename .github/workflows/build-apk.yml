@@ -37,15 +37,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ninja-build qemu-user-static ccache autoconf automake libtool pkg-config \
-            patch zip unzip libssl-dev zlib1g-dev libffi-dev
+            patch zip unzip e2fsprogs libssl-dev zlib1g-dev libffi-dev
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Cache dependencies
-        uses: actions/cache@v4
+      # Caches are saved right after the step producing them (not at the end of the job),
+      # so a failure in a later step doesn't throw away hours of compilation.
+      - name: Restore dependencies
+        id: deps-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             _work/android_arm64_libs
@@ -53,8 +56,8 @@ jobs:
             _work/downloads
           key: deps-${{ runner.os }}-${{ hashFiles('BLENDER_VERSION', 'deps/**', 'scripts/env.sh', 'scripts/build_deps.sh') }}
 
-      - name: Cache compiler output
-        uses: actions/cache@v4
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
         with:
           path: _work/ccache
           key: ccache-${{ runner.os }}-${{ github.sha }}
@@ -72,10 +75,32 @@ jobs:
       - name: Dependencies
         run: ./scripts/build_deps.sh
 
+      - name: Save dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            _work/android_arm64_libs
+            _work/host_python
+            _work/downloads
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
       - name: Blender
         run: |
           ./scripts/build_blender.sh
           ccache --show-stats || true
+
+      - name: Save compiler cache
+        if: always() && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: _work/ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+
+      # Runs the Android build in background mode with QEMU user-mode emulation and Android's
+      # bionic libraries: Python, modeling, file I/O and Cycles rendering.
+      - name: Smoke test (QEMU)
+        run: ./tests/qemu/run_blender.sh
 
       - name: APK
         run: ./scripts/package_apk.sh
