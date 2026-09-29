@@ -97,7 +97,8 @@ def main():
     # Time stretching (Rubberband).
     check(hasattr(tone, "timeStretchPitchScale"), "aud with Rubberband")
     stretched = tone.timeStretchPitchScale(2.0, 1.0).data()
-    check(abs(len(stretched) - 48000) < 4800, "time stretch x2: {:d} samples".format(len(stretched)))
+    # Twice as long, plus Rubberband's processing latency.
+    check(1.8 * 24000 < len(stretched) < 2.6 * 24000, "time stretch x2: {:d} samples".format(len(stretched)))
 
     scene = bpy.context.scene
     cube = bpy.data.objects["Cube"]
@@ -193,6 +194,9 @@ def main():
     scene.cycles.samples = 1
     scene.frame_start = 1
     scene.frame_end = 4
+    # AV1 (libaom) splits frames in tiles, too small frames can't be split.
+    scene.render.resolution_x = 256
+    scene.render.resolution_y = 192
     scene.render.image_settings.media_type = 'VIDEO'
     scene.render.image_settings.file_format = 'FFMPEG'
     for container, codec, audio_codec in (
@@ -213,10 +217,13 @@ def main():
         paths = glob.glob(prefix + "*")
         check(len(paths) == 1, "render video {:s}/{:s} ({:.1f}s)".format(container, codec, time.time() - start))
         clip = bpy.data.movieclips.load(paths[0])
-        check(clip.frame_duration == 4 and tuple(clip.size) == (64, 48),
+        # The duration is estimated from the container, which can include the audio's pre-roll.
+        check(clip.frame_duration in {4, 5} and tuple(clip.size) == (256, 192),
               "load video {:s}: {:d} frames {:d}x{:d}".format(
                   os.path.basename(paths[0]), clip.frame_duration, *clip.size))
     scene.render.image_settings.media_type = 'IMAGE'
+    scene.render.resolution_x = 64
+    scene.render.resolution_y = 48
 
     # Read back through OpenImageIO & OpenColorIO.
     image = bpy.data.images.load(os.path.join(output_dir, "render.png"))

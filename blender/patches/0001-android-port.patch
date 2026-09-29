@@ -965,6 +965,74 @@ index d7630e3..b520698 100644
  
      newact.sa_sigaction = sigbus_handler;
      newact.sa_flags = SA_SIGINFO;
+diff --git a/source/blender/blenlib/intern/system.cc b/source/blender/blenlib/intern/system.cc
+index 473457d..2bf46d1 100644
+--- a/source/blender/blenlib/intern/system.cc
++++ b/source/blender/blenlib/intern/system.cc
+@@ -27,6 +27,9 @@
+ #else
+ #  if defined(HAVE_EXECINFO_H)
+ #    include <execinfo.h>
++#  elif defined(__ANDROID__)
++#    include <dlfcn.h>
++#    include <unwind.h>
+ #  endif
+ #  include <sys/resource.h>
+ #  include <unistd.h>
+@@ -100,6 +103,53 @@ void BLI_system_backtrace_with_os_info(FILE *fp, const void * /*os_info*/)
+   free(strings);
+ #    undef SIZE
+ 
++#  elif defined(__ANDROID__)
++  /* ---------------------------------------------------------------------- */
++  /* Android: `backtrace()` is only available from API level 33, unwind the stack with the
++   * unwinder of the C++ run-time. Most symbols of `libblender.so` are hidden, the offsets in the
++   * libraries can be expanded with `llvm-addr2line -f -C -e libblender.so <offset>`. */
++  struct State {
++    void **current;
++    void **end;
++  };
++  void *buffer[100];
++  State state = {buffer, buffer + 100};
++  _Unwind_Backtrace(
++      [](_Unwind_Context *context, void *user_data) -> _Unwind_Reason_Code {
++        State *state = static_cast<State *>(user_data);
++        const uintptr_t pc = _Unwind_GetIP(context);
++        if (pc != 0) {
++          if (state->current == state->end) {
++            return _URC_END_OF_STACK;
++          }
++          *state->current++ = reinterpret_cast<void *>(pc);
++        }
++        return _URC_NO_REASON;
++      },
++      &state);
++  for (void **frame = buffer; frame != state.current; frame++) {
++    Dl_info info = {};
++    if (dladdr(*frame, &info) && info.dli_fname) {
++      const char *name = strrchr(info.dli_fname, '/');
++      name = name ? name + 1 : info.dli_fname;
++      const uintptr_t offset = uintptr_t(*frame) - uintptr_t(info.dli_fbase);
++      if (info.dli_sname) {
++        fprintf(fp,
++                "%s(%s+0x%zx) [+0x%zx]\n",
++                name,
++                info.dli_sname,
++                size_t(uintptr_t(*frame) - uintptr_t(info.dli_saddr)),
++                size_t(offset));
++      }
++      else {
++        fprintf(fp, "%s [+0x%zx]\n", name, size_t(offset));
++      }
++    }
++    else {
++      fprintf(fp, "[%p]\n", *frame);
++    }
++  }
++
+ #  else
+   /* --------------------- */
+   /* Non MSVC/Apple/Linux. */
 diff --git a/source/blender/gpu/vulkan/vk_backend.cc b/source/blender/gpu/vulkan/vk_backend.cc
 index bb56a97..e508303 100644
 --- a/source/blender/gpu/vulkan/vk_backend.cc
@@ -1128,6 +1196,118 @@ index 473dafa..835918e 100644
  
      vk_pipeline_rasterization_state_create_info.cullMode = to_vk_cull_mode_flags(
          static_cast<GPUFaceCullTest>(shaders_info.state.culling_test));
+diff --git a/source/blender/io/usd/CMakeLists.txt b/source/blender/io/usd/CMakeLists.txt
+index 782d830..668c55b 100644
+--- a/source/blender/io/usd/CMakeLists.txt
++++ b/source/blender/io/usd/CMakeLists.txt
+@@ -17,7 +17,8 @@ endif()
+ # Pre-compiled Linux libraries are made with GCC, and USD uses some extensions
+ # which lead to an incompatible ABI for Clang. Using those extensions with
+ # Clang as well works around the issue.
+-if(UNIX AND NOT APPLE)
++# On Android USD is built with Clang & libc++ (no GNU extensions).
++if(UNIX AND NOT APPLE AND NOT ANDROID)
+   if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+     if(DEFINED LIBDIR)
+       add_definitions(-DARCH_HAS_GNU_STL_EXTENSIONS)
+diff --git a/source/blender/io/usd/intern/usd_capi_export.cc b/source/blender/io/usd/intern/usd_capi_export.cc
+index 7726a44..089f637 100644
+--- a/source/blender/io/usd/intern/usd_capi_export.cc
++++ b/source/blender/io/usd/intern/usd_capi_export.cc
+@@ -7,6 +7,7 @@
+ #include "IO_subdiv_disabler.hh"
+ #include "usd.hh"
+ #include "usd_colorspace_utils.hh"
++#include "usd_utils.hh"
+ #include "usd_hierarchy_iterator.hh"
+ #include "usd_hook.hh"
+ #include "usd_instancing_utils.hh"
+@@ -818,6 +819,8 @@ bool USD_export(const bContext *C,
+     return false;
+   }
+ 
++  ensure_usd_plugin_path_registered();
++
+   ViewLayer *view_layer = CTX_data_view_layer(C);
+   Scene *scene = CTX_data_scene(C);
+ 
+diff --git a/source/blender/io/usd/intern/usd_capi_import.cc b/source/blender/io/usd/intern/usd_capi_import.cc
+index 03f980b..190f1f1 100644
+--- a/source/blender/io/usd/intern/usd_capi_import.cc
++++ b/source/blender/io/usd/intern/usd_capi_import.cc
+@@ -5,6 +5,7 @@
+ #include "IO_types.hh"
+ #include "usd.hh"
+ #include "usd_hook.hh"
++#include "usd_utils.hh"
+ #include "usd_reader_domelight.hh"
+ #include "usd_reader_geom.hh"
+ #include "usd_reader_prim.hh"
+@@ -451,6 +452,8 @@ bool USD_import(bContext *C,
+                 bool as_background_job,
+                 ReportList *reports)
+ {
++  ensure_usd_plugin_path_registered();
++
+   /* Using new here since `MEM_*` functions do not call constructor to properly initialize data. */
+   ImportJobData *job = new ImportJobData();
+   job->C = C;
+@@ -613,6 +616,7 @@ CacheArchiveHandle *USD_create_handle(Main * /*bmain*/,
+                                       const char *filepath,
+                                       ListBaseT<CacheObjectPath> *object_paths)
+ {
++  ensure_usd_plugin_path_registered();
+   pxr::UsdStageRefPtr stage = pxr::UsdStage::Open(filepath);
+ 
+   if (!stage) {
+diff --git a/source/blender/io/usd/intern/usd_utils.cc b/source/blender/io/usd/intern/usd_utils.cc
+index d601ea8..d0eaf42 100644
+--- a/source/blender/io/usd/intern/usd_utils.cc
++++ b/source/blender/io/usd/intern/usd_utils.cc
+@@ -13,8 +13,28 @@
+ #include <pxr/usd/usd/prim.h>
+ #include <pxr/usd/usd/stage.h>
+ 
++#ifdef __ANDROID__
++#  include "BKE_appdir.hh"
++
++#  include <mutex>
++#  include <pxr/base/plug/registry.h>
++#endif
++
+ namespace blender::io::usd {
+ 
++void ensure_usd_plugin_path_registered()
++{
++#ifdef __ANDROID__
++  static std::once_flag once;
++  std::call_once(once, []() {
++    const std::optional<std::string> path = BKE_appdir_folder_id(BLENDER_DATAFILES, "usd");
++    if (path) {
++      pxr::PlugRegistry::GetInstance().RegisterPlugins(*path);
++    }
++  });
++#endif
++}
++
+ static bool is_safe_char(const pxr::TfUtf8CodePoint cp, bool is_first, bool allow_unicode)
+ {
+   constexpr pxr::TfUtf8CodePoint cp_underscore = pxr::TfUtf8CodePointFromAscii('_');
+diff --git a/source/blender/io/usd/intern/usd_utils.hh b/source/blender/io/usd/intern/usd_utils.hh
+index 9c26c2a..dabfc1e 100644
+--- a/source/blender/io/usd/intern/usd_utils.hh
++++ b/source/blender/io/usd/intern/usd_utils.hh
+@@ -41,4 +41,10 @@ std::string make_safe_primvar_name(StringRef name, bool allow_unicode);
+  * \return A valid, and unique, USD `SdfPath`
+  */
+ pxr::SdfPath get_unique_path(pxr::UsdStageRefPtr stage, const std::string &path);
++
++/**
++ * Register USD's plug-ins when USD is linked statically (Android): their resources are installed
++ * with Blender's data files, which USD doesn't know about. To call before using USD.
++ */
++void ensure_usd_plugin_path_registered();
+ }  // namespace blender::io::usd
 diff --git a/source/blender/makesdna/intern/CMakeLists.txt b/source/blender/makesdna/intern/CMakeLists.txt
 index 24a0639..847d741 100644
 --- a/source/blender/makesdna/intern/CMakeLists.txt
@@ -1152,6 +1332,20 @@ index da7857d..8b9caa8 100644
      "$<TARGET_FILE:makesrna>" ${CMAKE_SOURCE_DIR}/source/blender/makesdna/ ${CMAKE_CURRENT_BINARY_DIR}/ ${CMAKE_CURRENT_BINARY_DIR}/../
    DEPENDS makesrna
  )
+diff --git a/source/blender/render/hydra/CMakeLists.txt b/source/blender/render/hydra/CMakeLists.txt
+index 2f9cf83..9572d03 100644
+--- a/source/blender/render/hydra/CMakeLists.txt
++++ b/source/blender/render/hydra/CMakeLists.txt
+@@ -17,7 +17,8 @@ endif()
+ # Pre-compiled Linux libraries are made with GCC, and USD uses some extensions
+ # which lead to an incompatible ABI for Clang. Using those extensions with
+ # Clang as well works around the issue.
+-if(UNIX AND NOT APPLE)
++# On Android USD is built with Clang & libc++ (no GNU extensions).
++if(UNIX AND NOT APPLE AND NOT ANDROID)
+   if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+     if(DEFINED LIBDIR)
+       add_definitions(-DARCH_HAS_GNU_STL_EXTENSIONS)
 diff --git a/source/blender/windowmanager/intern/wm_window.cc b/source/blender/windowmanager/intern/wm_window.cc
 index 4c0aa2c..9077d57 100644
 --- a/source/blender/windowmanager/intern/wm_window.cc
@@ -1238,7 +1432,7 @@ index 4c0aa2c..9077d57 100644
    if (UNLIKELY(g_system == nullptr)) {
      /* GHOST will have reported the back-ends that failed to load. */
 diff --git a/source/creator/CMakeLists.txt b/source/creator/CMakeLists.txt
-index 985b969..9c3a28b 100644
+index 985b969..c70aa11 100644
 --- a/source/creator/CMakeLists.txt
 +++ b/source/creator/CMakeLists.txt
 @@ -149,6 +149,18 @@ set(SRC
@@ -1260,7 +1454,7 @@ index 985b969..9c3a28b 100644
  if(CMAKE_GENERATOR MATCHES "^Visual Studio.+")
    # This helps visual studio find the debugger visualizers
    list(APPEND SRC ${CMAKE_SOURCE_DIR}/tools/utils_ide/natvis/Blender.natvis)
-@@ -334,6 +346,22 @@ if(WITH_PYTHON_MODULE)
+@@ -334,6 +346,23 @@ if(WITH_PYTHON_MODULE)
      )
    endif()
  
@@ -1270,20 +1464,21 @@ index 985b969..9c3a28b 100644
 +  if(WITH_PYTHON)
 +    # All of Python: extension modules (NumPy ...) and the Python executable (see the Android
 +    # app project) use parts of Python's API Blender itself doesn't use.
++    # NOTE: a single option, CMake removes repeated options (e.g. `--whole-archive`).
 +    target_link_options(blender PRIVATE
-+      "LINKER:--whole-archive" "${PYTHON_LIBRARY}" "LINKER:--no-whole-archive"
++      "LINKER:--whole-archive,${PYTHON_LIBRARY},--no-whole-archive"
 +    )
 +  endif()
 +  if(WITH_USD)
 +    # All of the static USD library: types & plug-ins are registered by static initializers.
 +    target_link_options(blender PRIVATE
-+      "LINKER:--whole-archive" "${USD_LIBRARY}" "LINKER:--no-whole-archive"
++      "LINKER:--whole-archive,${USD_LIBRARY},--no-whole-archive"
 +    )
 +  endif()
  else()
    add_executable(blender ${EXETYPE} ${SRC})
    if(WITH_CPU_CHECK)
-@@ -500,7 +528,8 @@ if(WITH_PYTHON)
+@@ -500,7 +529,8 @@ if(WITH_PYTHON)
    # The glTF add-on's draco & meshopt bridge libraries, loaded at run-time by `io_scene_gltf2`.
    # Portable Linux builds place them in `lib` beside their bundled dependencies (found via each
    # target's `$ORIGIN` RPATH); otherwise beside the add-on where `library.py` looks for them.
@@ -1293,7 +1488,7 @@ index 985b969..9c3a28b 100644
      set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_LIB}")
    else()
      set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_VER_LIBS}/scripts/addons_core/io_scene_gltf2")
-@@ -750,7 +779,39 @@ endfunction()
+@@ -750,7 +780,39 @@ endfunction()
  # -----------------------------------------------------------------------------
  # Install Targets (Platform Specific)
  
@@ -1334,13 +1529,13 @@ index 985b969..9c3a28b 100644
  
    if(PLATFORM_BUNDLED_LIBRARIES AND TARGETDIR_LIB)
      install(
-@@ -1994,6 +2055,16 @@ if((DEFINED LIBDIR) AND TARGETDIR_LIB)
+@@ -1994,6 +2056,16 @@ if((DEFINED LIBDIR) AND TARGETDIR_LIB)
          DESTINATION ${TARGETDIR_LIB}
        )
        install(DIRECTORY ${LIBDIR}/usd/plugin/usd/ DESTINATION "blender.shared/usd")
 +    elseif(ANDROID)
-+      # Linked statically, the plug-in resources are found through `PXR_PLUGINPATH_NAME`
-+      # (see `creator_android.cc`).
++      # Linked statically, the plug-in resources are registered from the data files
++      # (see `ensure_usd_plugin_path_registered`).
 +      install(DIRECTORY
 +        ${USD_LIBRARY_DIR}/usd
 +        DESTINATION "${TARGETDIR_VER}/datafiles"
@@ -1351,6 +1546,30 @@ index 985b969..9c3a28b 100644
      elseif(USD_PYTHON_SUPPORT)
        install(DIRECTORY
          ${USD_LIBRARY_DIR}/usd
+@@ -2039,10 +2111,19 @@ endif()
+ # Always install MaterialX files regardless if Blender itself uses them, the
+ # bundled Python module still needs it.
+ if((DEFINED LIBDIR) AND TARGETDIR_LIB AND WITH_MATERIALX)
+-  install(
+-    DIRECTORY ${LIBDIR}/materialx/libraries
+-    DESTINATION "${TARGETDIR_LIB}/materialx"
+-  )
++  if(ANDROID)
++    # Packaged with the data files, USD finds them through `PXR_MTLX_STDLIB_SEARCH_PATHS`
++    # (see `creator_android.cc`).
++    install(
++      DIRECTORY ${LIBDIR}/libraries
++      DESTINATION "${TARGETDIR_VER}/datafiles/materialx"
++    )
++  else()
++    install(
++      DIRECTORY ${LIBDIR}/materialx/libraries
++      DESTINATION "${TARGETDIR_LIB}/materialx"
++    )
++  endif()
+ endif()
+ 
+ if(WIN32)
 diff --git a/source/creator/creator.cc b/source/creator/creator.cc
 index 4253893..c4db20f 100644
 --- a/source/creator/creator.cc

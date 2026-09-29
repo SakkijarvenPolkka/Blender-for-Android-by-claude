@@ -127,13 +127,12 @@ int main(int argc, char *argv[])
     log_redirect_init();
   }
 
-  /* USD is linked statically (no library directory to find its plug-ins from), its plug-in
-   * resources are installed with the data files. */
-  const char *resources = getenv("BLENDER_SYSTEM_RESOURCES");
-  if (resources != nullptr && getenv("PXR_PLUGINPATH_NAME") == nullptr) {
-    char usd_path[4096];
-    snprintf(usd_path, sizeof(usd_path), "%s/datafiles/usd", resources);
-    setenv("PXR_PLUGINPATH_NAME", usd_path, 0);
+  /* USD is linked statically, the MaterialX standard library it uses is installed with the data
+   * files (USD's own plug-ins are registered by Blender, see `io/usd`). */
+  if (const char *resources = getenv("BLENDER_SYSTEM_RESOURCES")) {
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/datafiles/materialx/libraries", resources);
+    setenv("PXR_MTLX_STDLIB_SEARCH_PATHS", path, 0);
   }
 
   /* SDL passes the arguments given by `SDLActivity.getArguments()`

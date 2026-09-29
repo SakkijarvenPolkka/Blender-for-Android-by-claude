@@ -38,3 +38,15 @@
  #else
       return execv(path, argv);
  #endif
+--- a/pxr/imaging/plugin/CMakeLists.txt
++++ b/pxr/imaging/plugin/CMakeLists.txt
+@@ -9,4 +9,8 @@
+     add_subdirectory(hioOiio)
+ endif()
+ add_subdirectory(hioOpenEXR)
+-add_subdirectory(hioAvif)
++# PXR_BUILD_AVIF_PLUGIN=OFF: without the AV1 decoder (a copy of libaom, whose symbols conflict
++# with libaom when USD is linked statically together with it).
++if (NOT DEFINED PXR_BUILD_AVIF_PLUGIN OR PXR_BUILD_AVIF_PLUGIN)
++    add_subdirectory(hioAvif)
++endif()
