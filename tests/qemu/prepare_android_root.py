@@ -24,8 +24,8 @@ import zipfile
 
 SYSTEM_IMAGE_URL = "https://dl.google.com/android/repository/sys-img/android/arm64-v8a-34_r04.zip"
 NDK_STUB_LIBS = (
-    "libandroid.so", "libvulkan.so", "liblog.so", "libEGL.so", "libGLESv2.so", "libGLESv3.so",
-    "libOpenSLES.so", "libaaudio.so", "libnativewindow.so", "libjnigraphics.so",
+    "libandroid.so", "libvulkan.so", "liblog.so", "libEGL.so", "libGLESv1_CM.so", "libGLESv2.so",
+    "libGLESv3.so", "libOpenSLES.so", "libaaudio.so", "libnativewindow.so", "libjnigraphics.so",
 )
 
 
@@ -100,10 +100,22 @@ def main():
     args = parser.parse_args()
 
     root = os.path.abspath(args.output)
+    lib_dir = os.path.join(root, "system", "lib64")
     if os.path.exists(os.path.join(root, "system", "bin", "linker64")):
-        print("Android root already prepared:", root)
-        return 0
+        print("Bionic already extracted:", root)
+    else:
+        extract_bionic(args, root, lib_dir)
 
+    copy_ndk_stubs(args, lib_dir)
+
+    # Silences the linker warning about the missing generated configuration.
+    os.makedirs(os.path.join(root, "linkerconfig"), exist_ok=True)
+    open(os.path.join(root, "linkerconfig", "ld.config.txt"), "w").close()
+    print("Android root prepared:", root)
+    return 0
+
+
+def extract_bionic(args, root, lib_dir):
     with tempfile.TemporaryDirectory() as tmp:
         image_zip = args.system_image_zip
         if args.system_img:
@@ -142,7 +154,6 @@ def main():
             debugfs(payload, "rdump /{:s} {:s}".format(directory, runtime))
 
         os.makedirs(os.path.join(root, "system", "bin"), exist_ok=True)
-        lib_dir = os.path.join(root, "system", "lib64")
         os.makedirs(lib_dir, exist_ok=True)
         shutil.copy2(os.path.join(runtime, "bin", "linker64"), os.path.join(root, "system", "bin"))
         for lib in ("libc.so", "libm.so", "libdl.so", "libdl_android.so"):
@@ -152,18 +163,14 @@ def main():
         if os.path.isfile(ld_android):
             shutil.copy2(ld_android, lib_dir)
 
+
+def copy_ndk_stubs(args, lib_dir):
     stub_dir = os.path.join(args.ndk, "toolchains", "llvm", "prebuilt", "linux-x86_64", "sysroot",
                             "usr", "lib", "aarch64-linux-android", args.api)
     for lib in NDK_STUB_LIBS:
         src = os.path.join(stub_dir, lib)
         if os.path.exists(src):
             shutil.copy2(src, lib_dir)
-
-    # Silences the linker warning about the missing generated configuration.
-    os.makedirs(os.path.join(root, "linkerconfig"), exist_ok=True)
-    open(os.path.join(root, "linkerconfig", "ld.config.txt"), "w").close()
-    print("Android root prepared:", root)
-    return 0
 
 
 if __name__ == "__main__":
