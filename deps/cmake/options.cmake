@@ -9,6 +9,9 @@ if(NOT BLENDER_SOURCE_DIR OR NOT EXISTS "${BLENDER_SOURCE_DIR}/build_files/build
   message(FATAL_ERROR "BLENDER_SOURCE_DIR must point to the Blender source tree")
 endif()
 
+# Patches of the Android port (`deps/patches`).
+set(ANDROID_PATCH_DIR ${CMAKE_SOURCE_DIR}/patches)
+
 set(ANDROID_TOOLCHAIN_FILE "${ANDROID_NDK}/build/cmake/android.toolchain.cmake")
 set(ANDROID_TOOLCHAIN_DIR "${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64")
 set(ANDROID_TRIPLE "aarch64-linux-android")

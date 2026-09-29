@@ -6,8 +6,9 @@ Smoke test for the Android build of Blender, run in background mode:
 
 Exercises Python (standard library extension modules, bundled packages), modeling (OpenSubdiv,
 Manifold booleans), file I/O (.blend, OBJ, PLY, STL, glTF with Draco & meshoptimizer
-compression, FBX, image formats through OpenImageIO), color management (OpenColorIO), rendering
-with Cycles on the CPU, video encoding & decoding (FFmpeg) and audio files (libsndfile, FFmpeg).
+compression, FBX, Alembic, image formats through OpenImageIO), color management (OpenColorIO),
+rendering with Cycles on the CPU (Embree, path guiding, OpenImageDenoise), volumes (OpenVDB),
+video encoding & decoding (FFmpeg) and audio files (libsndfile, FFmpeg).
 """
 
 import glob
@@ -166,6 +167,23 @@ def main():
         bpy.ops.render.render(write_still=True)
         check(os.path.exists(path), "Cycles render to {:s} ({:.1f}s)".format(file_format, time.time() - start))
 
+    # Cycles features for the CPU: Embree, path guiding (OpenPGL), denoising (OpenImageDenoise).
+    import _cycles
+    for feature in ("with_embree", "with_path_guiding", "with_openimagedenoise"):
+        check(getattr(_cycles, feature), "Cycles " + feature)
+    scene.render.image_settings.file_format = 'PNG'
+    scene.cycles.use_guiding = True
+    scene.cycles.use_denoising = True
+    scene.cycles.denoiser = 'OPENIMAGEDENOISE'
+    path = os.path.join(output_dir, "render_guided_denoised.png")
+    scene.render.filepath = path
+    start = time.time()
+    bpy.ops.render.render(write_still=True)
+    check(os.path.exists(path), "Cycles render with path guiding & OpenImageDenoise ({:.1f}s)".format(
+        time.time() - start))
+    scene.cycles.use_guiding = False
+    scene.cycles.use_denoising = False
+
     # Video through FFmpeg: render short animations and read them back.
     scene.cycles.samples = 1
     scene.frame_start = 1
@@ -218,6 +236,45 @@ def main():
         meshes = len(bpy.data.meshes)
         bpy.ops.import_scene.gltf(filepath=path)
         check(len(bpy.data.meshes) > meshes, "glTF import with {:s} compression".format(name))
+
+    # Volumes (OpenVDB): mesh to volume, save & load a .vdb file, render (NanoVDB in Cycles).
+    bpy.ops.object.volume_add()
+    volume_object = bpy.context.active_object
+    to_volume = volume_object.modifiers.new("Mesh to Volume", 'MESH_TO_VOLUME')
+    to_volume.object = bpy.data.objects["Cube"]
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    volume = volume_object.evaluated_get(depsgraph).data
+    check(len(volume.grids) > 0, "mesh to volume (OpenVDB): {:d} grid(s)".format(len(volume.grids)))
+    vdb_path = os.path.join(output_dir, "volume.vdb")
+    volume.grids.save(vdb_path)
+    check(os.path.exists(vdb_path) and os.path.getsize(vdb_path) > 0, "save .vdb")
+    bpy.data.objects.remove(volume_object)
+    bpy.ops.object.volume_import(filepath=vdb_path)
+    imported = bpy.context.active_object
+    imported.data.grids.load()
+    check(len(imported.data.grids) > 0, "load .vdb: {:d} grid(s)".format(len(imported.data.grids)))
+    material = bpy.data.materials.new("Volume")
+    material.use_nodes = True
+    nodes = material.node_tree.nodes
+    nodes.clear()
+    principled = nodes.new('ShaderNodeVolumePrincipled')
+    output = nodes.new('ShaderNodeOutputMaterial')
+    material.node_tree.links.new(principled.outputs[0], output.inputs["Volume"])
+    imported.data.materials.append(material)
+    scene.render.image_settings.file_format = 'PNG'
+    path = os.path.join(output_dir, "render_volume.png")
+    scene.render.filepath = path
+    start = time.time()
+    bpy.ops.render.render(write_still=True)
+    check(os.path.exists(path), "Cycles volume render ({:.1f}s)".format(time.time() - start))
+
+    # Alembic.
+    abc_path = os.path.join(output_dir, "scene.abc")
+    bpy.ops.wm.alembic_export(filepath=abc_path, start=1, end=2)
+    check(os.path.exists(abc_path) and os.path.getsize(abc_path) > 0, "export Alembic")
+    objects = len(bpy.data.objects)
+    bpy.ops.wm.alembic_import(filepath=abc_path)
+    check(len(bpy.data.objects) > objects, "import Alembic: {:d} object(s)".format(len(bpy.data.objects) - objects))
 
     log("ALL TESTS PASSED")
 

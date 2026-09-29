@@ -32,13 +32,14 @@ set(CMAKE_PREFIX_PATH ${LIBDIR})
 foreach(_root
     OPENEXR IMATH OPENJPH OPENIMAGEIO OPENCOLORIO JPEG PNG ZLIB ZSTD EPOXY FMT FREETYPE BROTLI
     PYTHON OPENJPEG SDL FFTW3 WEBP PUGIXML TBB GMP POTRACE OPENSUBDIV VULKAN SHADERC
-    SSE2NEON EIGEN3 MANIFOLD FFMPEG LIBSNDFILE HARFBUZZ FRIBIDI HARU)
+    SSE2NEON EIGEN3 MANIFOLD FFMPEG LIBSNDFILE HARFBUZZ FRIBIDI HARU OPENVDB NANOVDB BLOSC
+    ALEMBIC EMBREE OPENIMAGEDENOISE USD)
   set(${_root}_ROOT_DIR ${LIBDIR})
 endforeach()
 unset(_root)
 foreach(_package
     OpenEXR Imath openjph OpenImageIO OpenColorIO fmt Eigen3 TBB manifold absl Ceres draco
-    meshoptimizer)
+    meshoptimizer openpgl MaterialX)
   set(${_package}_ROOT ${LIBDIR})
 endforeach()
 unset(_package)
@@ -251,11 +252,69 @@ if(WITH_MESHOPTIMIZER)
   mark_as_advanced(meshoptimizer_DIR)
 endif()
 
+# Volumes.
+if(WITH_OPENVDB)
+  find_package(OpenVDB)
+  set_and_warn_library_found("OpenVDB" OPENVDB_FOUND WITH_OPENVDB)
+  if(OPENVDB_FOUND)
+    set(OPENVDB_DEFINITIONS "")
+    # Static library, with its dependencies.
+    find_package_wrapper(Blosc REQUIRED)
+    list(APPEND OPENVDB_LIBRARIES ${BLOSC_LIBRARIES} ${ZLIB_LIBRARIES})
+  endif()
+endif()
+
+if(WITH_NANOVDB)
+  find_package_wrapper(NanoVDB)
+  set_and_warn_library_found("NanoVDB" NANOVDB_FOUND WITH_NANOVDB)
+endif()
+
+if(WITH_ALEMBIC)
+  find_package_wrapper(Alembic)
+  set_and_warn_library_found("Alembic" ALEMBIC_FOUND WITH_ALEMBIC)
+endif()
+
+if(WITH_MATERIALX)
+  find_package_wrapper(MaterialX)
+  set_and_warn_library_found("MaterialX" MaterialX_FOUND WITH_MATERIALX)
+  mark_as_advanced(MaterialX_DIR)
+endif()
+
+# Cycles on the CPU (NEON).
+if(WITH_CYCLES AND WITH_CYCLES_EMBREE)
+  find_package(Embree 4.0.0 REQUIRED)
+endif()
+
+if(WITH_CYCLES AND WITH_CYCLES_PATH_GUIDING)
+  find_package_wrapper(openpgl)
+  mark_as_advanced(openpgl_DIR)
+  if(openpgl_FOUND)
+    get_target_property(OPENPGL_LIBRARIES openpgl::openpgl LOCATION)
+    get_target_property(OPENPGL_INCLUDE_DIR openpgl::openpgl INTERFACE_INCLUDE_DIRECTORIES)
+  else()
+    set(WITH_CYCLES_PATH_GUIDING OFF)
+    message(STATUS "OpenPGL not found, disabling WITH_CYCLES_PATH_GUIDING")
+  endif()
+endif()
+
+if(WITH_OPENIMAGEDENOISE)
+  find_package_wrapper(OpenImageDenoise)
+  set_and_warn_library_found("OpenImageDenoise" OPENIMAGEDENOISE_FOUND WITH_OPENIMAGEDENOISE)
+  if(OPENIMAGEDENOISE_FOUND)
+    # Static library with the CPU device only: the modules it's made of.
+    foreach(_lib OpenImageDenoise_core OpenImageDenoise_device_cpu)
+      find_library_static(OIDN_${_lib}_LIBRARY NAMES ${_lib} HINTS ${LIBDIR}/lib REQUIRED)
+      mark_as_advanced(OIDN_${_lib}_LIBRARY)
+      list(APPEND OPENIMAGEDENOISE_LIBRARIES ${OIDN_${_lib}_LIBRARY})
+    endforeach()
+    unset(_lib)
+  endif()
+endif()
+
 # Features that are not available (yet) on Android.
 foreach(_option
     WITH_OPENAL WITH_JACK WITH_PULSEAUDIO WITH_PIPEWIRE
-    WITH_INPUT_NDOF WITH_CYCLES_OSL WITH_CYCLES_EMBREE WITH_CYCLES_PATH_GUIDING WITH_OPENVDB
-    WITH_NANOVDB WITH_ALEMBIC WITH_USD WITH_MATERIALX WITH_HYDRA WITH_OPENIMAGEDENOISE WITH_LLVM
+    WITH_INPUT_NDOF WITH_CYCLES_OSL WITH_USD WITH_HYDRA WITH_LLVM
     WITH_XR_OPENXR WITH_RUBBERBAND WITH_TRACY
     WITH_GHOST_X11 WITH_GHOST_WAYLAND WITH_SYSTEM_AUDASPACE)
   if(${_option})

@@ -1,0 +1,46 @@
+--- a/core/thread.cpp
++++ b/core/thread.cpp
+@@ -193,6 +193,18 @@
+     if (threadIndex < 0 || threadIndex >= (int)affinities.size())
+       return;
+ 
++  #if defined(__ANDROID__)
++    // Bionic has no pthread_*affinity_np, zero is the calling thread.
++    if (sched_getaffinity(0, sizeof(cpu_set_t), &oldAffinities[threadIndex]) != 0)
++    {
++      printWarning("sched_getaffinity failed");
++      oldAffinities[threadIndex] = affinities[threadIndex];
++      return;
++    }
++
++    if (sched_setaffinity(0, sizeof(cpu_set_t), &affinities[threadIndex]) != 0)
++      printWarning("sched_setaffinity failed");
++  #else
+     const pthread_t thread = pthread_self();
+ 
+     // Save the current affinity
+@@ -206,6 +218,7 @@
+     // Set the new affinity
+     if (pthread_setaffinity_np(thread, sizeof(cpu_set_t), &affinities[threadIndex]) != 0)
+       printWarning("pthread_setaffinity_np failed");
++  #endif
+   }
+ 
+   void ThreadAffinity::restore(int threadIndex)
+@@ -213,11 +226,16 @@
+     if (threadIndex < 0 || threadIndex >= (int)affinities.size())
+       return;
+ 
++  #if defined(__ANDROID__)
++    if (sched_setaffinity(0, sizeof(cpu_set_t), &oldAffinities[threadIndex]) != 0)
++      printWarning("sched_setaffinity failed");
++  #else
+     const pthread_t thread = pthread_self();
+ 
+     // Restore the original affinity
+     if (pthread_setaffinity_np(thread, sizeof(cpu_set_t), &oldAffinities[threadIndex]) != 0)
+       printWarning("pthread_setaffinity_np failed");
++  #endif
+   }
+ 
+   std::vector<int> ThreadAffinity::parseList(const std::string& filename)
