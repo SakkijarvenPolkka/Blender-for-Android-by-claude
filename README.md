@@ -18,12 +18,13 @@ See "Build" below.*
 
 | 항목 | 상태 |
 | --- | --- |
-| 의존성 크로스 컴파일 (Python 3.13, OIIO, OCIO, OpenEXR, TBB, shaderc, SDL3, OpenSubdiv, Manifold, GMP, FFTW, FFmpeg, OpenVDB, Embree, OIDN …) | ✅ 빌드 확인 |
+| 의존성 약 70개 크로스 컴파일 (Python 3.13, OIIO, OCIO, OpenEXR, TBB, SDL3, OpenSubdiv, FFmpeg, OpenVDB, USD, Embree, OIDN …) | ✅ 빌드 확인 |
 | Blender 5.2.2 → `libblender.so` (arm64-v8a, API 31, 16KB 페이지 정렬) | ✅ 빌드·링크 확인 |
 | Android bionic 위에서 백그라운드 모드 실행 (QEMU, 아래 "검증") | ✅ 스모크 테스트 통과 |
 | NumPy 2.3, requests 등 Python 패키지, 확장(Extensions) 온라인 설치 | ✅ QEMU에서 확인 |
 | Claude 연동 (MCP 서버: Claude Code / Claude 앱에서 Blender 제어) | ✅ QEMU에서 종단 간 테스트 통과 |
-| APK 패키징 (Gradle, 데이터 자동 설치, 터치 툴바) | ✅ 약 115MB APK 생성 확인 |
+| FFmpeg 동영상, 오디오 파일, 모션 트래킹, 볼륨(OpenVDB), Alembic, USD·MaterialX, Cycles Embree·OIDN 등 | ✅ QEMU에서 확인 |
+| APK 패키징 (Gradle, 데이터 자동 설치, 터치 툴바) | ✅ 약 190MB APK 생성 확인 |
 | 실제 기기(Galaxy S22)에서 UI 실행 (SDL3 창, Vulkan, 터치 입력) | ⚠️ **실기기 테스트 전** — GPU 드라이버 호환성은 기기에서 확인 필요 |
 
 ### 검증
@@ -34,10 +35,16 @@ See "Build" below.*
 CI에서도 매 빌드마다 실행됩니다.
 
 - `blender --version` → `Blender 5.2.2 LTS`
-- 스모크 테스트 (`tests/qemu/smoke_test.py`, 백그라운드 모드): Python 표준 라이브러리 확장 모듈
-  (`ssl`/OpenSSL 3.5, `hashlib`, `sqlite3`, `lzma`, `bz2`, `zlib`, `decimal`, `ctypes`), OpenSubdiv 서브디비전,
-  Boolean(Manifold/Exact), .blend 저장·불러오기, OBJ/PLY/STL 내보내기, Cycles CPU 렌더링 → PNG/EXR/JPEG/WebP,
-  OpenImageIO 이미지 읽기, OpenColorIO(AgX), NumPy(`foreach_get`), glTF·FBX 내보내기 — **모두 통과**
+- 스모크 테스트 (`tests/qemu/smoke_test.py`, 백그라운드 모드) — **모두 통과**:
+  - Python 표준 라이브러리 확장 모듈(`ssl`/OpenSSL 3.5, `hashlib`, `sqlite3`, `lzma`, `bz2`, `decimal`, `ctypes`),
+    NumPy(`foreach_get`), requests
+  - OpenSubdiv 서브디비전, Boolean(Manifold/Exact), .blend 저장·불러오기
+  - 입출력: OBJ/PLY/STL, FBX, glTF(Draco·meshoptimizer 압축 내보내기·가져오기), Alembic, USD(usdc/usda,
+    MaterialX 셰이딩 네트워크) 내보내기·가져오기, OpenVDB(.vdb 저장·불러오기, 메시 → 볼륨)
+  - Cycles CPU 렌더링 → PNG/EXR/JPEG/WebP, Embree, 경로 가이딩 + OpenImageDenoise 디노이즈, 볼륨 렌더링
+  - FFmpeg: H.264/AAC(MP4), H.265, VP9/Opus(WebM), AV1/MP3(MKV) 동영상 렌더링과 무비 클립 불러오기
+  - 오디오 파일 쓰기·읽기(WAV, FLAC, Ogg Vorbis, MP3), Rubberband 시간 늘이기
+  - OpenImageIO 이미지 읽기, OpenColorIO(AgX)
 - Python 실행 파일(`sys.executable`, 격리 모드 `-I`): 표준 라이브러리·NumPy·requests 로드, 확장 플랫폼 CLI로
   extensions.blender.org 목록 동기화(HTTPS) 확인
 - MCP 서버 종단 간 테스트 (`tests/qemu/mcp_test.py`): 최신(2026-07-28)·구버전(2025-06-18) 프로토콜,
@@ -56,22 +63,23 @@ GPU(Vulkan) 경로와 터치·펜 입력은 에뮬레이션으로 확인할 수 
 - **확장(Extensions)**: extensions.blender.org에서 애드온 검색·설치 (환경설정 → 시스템 → 네트워크에서 온라인 접근 허용),
   원격 에셋 라이브러리·온라인 Essentials
 - **Claude 연동**: 내장 MCP 서버 애드온 — Claude Code나 Claude 앱이 Blender Python API를 사용 (아래 참고)
-- **입출력**: .blend, OBJ, PLY, STL, FBX, glTF/GLB(Draco·meshoptimizer 압축), Alembic, SVG, Grease Pencil PDF /
-  이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
+- **입출력**: .blend, OBJ, PLY, STL, FBX, glTF/GLB(Draco·meshoptimizer 압축), Alembic, USD(MaterialX), SVG,
+  Grease Pencil PDF / 이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
 - **동영상 (FFmpeg)**: 공식 릴리스와 같은 코덱 — H.264(x264), H.265(x265), VP9, AV1, Theora / AAC, Opus, Vorbis,
   MP3, FLAC. 애니메이션을 동영상으로 렌더링, 동영상 편집기(VSE), 동영상 클립 불러오기
 - **모션 트래킹**: 동영상 클립 트래킹·카메라 솔브 (libmv, Ceres)
 - **볼륨**: OpenVDB/NanoVDB — .vdb 불러오기·저장, 메시 ↔ 볼륨, Cycles 볼륨 렌더링
 - **모델링**: OpenSubdiv, Boolean(Manifold/Exact), Remesh, QuadriFlow, 물리(Bullet), 유체(Mantaflow), 오션
 - **텍스트**: HarfBuzz·FriBidi (복잡한 문자·오른쪽에서 왼쪽으로 쓰는 문자)
-- **오디오**: SDL3 (AAudio / OpenSL ES), 오디오 파일 읽기·쓰기 (libsndfile, FFmpeg)
+- **오디오**: SDL3 (AAudio / OpenSL ES), 오디오 파일 읽기·쓰기 (libsndfile, FFmpeg), 사운드 스트립 속도·피치(Rubberband)
 - **파일 열기**: 파일 관리자에서 `.blend` 파일 열기 지원
 
 ### 아직 지원하지 않는 기능
 
-USD·MaterialX(작업 중), OSL(Open Shading Language, LLVM 필요), Rubberband(오디오 피치/속도), OpenXR,
-Cycles GPU 렌더링(모바일 GPU용 Cycles 백엔드 없음), 여러 개의 창(환경설정·파일 브라우저·렌더 결과는 메인 창
-안에서 열림), 네이티브 라이브러리(glibc용 wheel)를 포함한 일부 확장은 지원하지 않습니다.
+OSL(Open Shading Language, LLVM 필요), Hydra 렌더 엔진(USD Storm, OpenGL 필요), USD의 Python 모듈(`pxr`,
+Blender 내부 USD 기능은 동작), OpenXR, Cycles GPU 렌더링(모바일 GPU용 Cycles 백엔드 없음), 여러 개의 창(환경설정·
+파일 브라우저·렌더 결과는 메인 창 안에서 열림), 네이티브 라이브러리(glibc용 wheel)를 포함한 일부 확장은 지원하지
+않습니다.
 
 ---
 
@@ -93,7 +101,8 @@ Cycles GPU 렌더링(모바일 GPU용 Cycles 백엔드 없음), 여러 개의 �
 화면 위쪽의 **떠 있는 툴바**: ⌨ 가상 키보드(단축키 입력용), Esc, Tab, Ctrl/Shift/Alt(토글), 실행 취소/다시 실행,
 Del, 뷰(앞/옆/위/카메라/원근 전환/선택 항목 보기). 왼쪽 ☰ 손잡이로 이동(드래그)하거나 접을(탭) 수 있습니다.
 
-- 첫 실행 시 Blender 데이터(약 190MB)를 내부 저장소에 설치합니다 (업데이트 후에도 한 번).
+- 첫 실행 시 Blender 데이터(약 200MB)를 내부 저장소에 설치합니다 (업데이트 후에도 한 번).
+  설치 후 앱 전체 용량은 약 650MB입니다.
 - "모든 파일 접근" 권한을 허용하면 기기의 모든 폴더에서 .blend 파일을 열고 저장할 수 있습니다.
 - UI 크기는 Blender의 *환경설정 → 인터페이스 → 해상도 배율*로 조절합니다.
 - 앱이 백그라운드로 전환될 때 자동 저장(복구 파일)을 기록합니다. *파일 → 복구 → 자동 저장*으로 복원할 수 있습니다.
@@ -153,13 +162,18 @@ adb install -r _work/out/Blender-5.2.2-android-arm64-v8a.apk
 | --- | --- | --- |
 | `scripts/setup_sdk.sh` | Android NDK r29 / SDK 설치 | 수 분 |
 | `scripts/fetch_blender.sh` | Blender 5.2.2 소스 다운로드·검증, Android 패치 적용 | 1분 |
-| `scripts/build_deps.sh` | 의존성 약 40개 크로스 컴파일 (`deps/`) | 약 40분 |
-| `scripts/build_blender.sh` | Blender 크로스 컴파일 → `libblender.so` + 데이터 | 1.5~2시간 |
+| `scripts/build_deps.sh` | 의존성 약 70개 크로스 컴파일 (`deps/`), 바뀐 것만 다시 빌드 | 약 2~3시간 (USD 포함) |
+| `scripts/build_blender.sh` | Blender 크로스 컴파일 → `libblender.so` + 데이터 | 3~4시간 |
 | `scripts/package_apk.sh` | 데이터 압축, Gradle로 APK 생성 | 수 분 |
 
 모든 결과물은 `_work/` 아래에 생성됩니다 (`WORK_DIR` 환경 변수로 변경 가능). GitHub Actions
 (`.github/workflows/build-apk.yml`)도 같은 스크립트로 APK를 빌드해 아티팩트로 올립니다.
 `v*` 태그를 푸시하면 릴리스에 APK가 첨부됩니다.
+
+의존성은 설치될 때마다 설정 해시를 `LIBDIR/.deps/`에 기록하므로, 캐시된 `LIBDIR`에서는 추가·변경된 의존성만
+빌드합니다. CI는 GitHub 호스트 러너의 6시간 제한 안에 끝나도록 단계를 나눕니다: 의존성(`deps.yml`)과
+Blender(`blender.yml`) 모두 시간 제한(`DEPS_TIME_LIMIT`, `BLENDER_TIME_LIMIT`)에 도달하면 그때까지의 결과를
+캐시에 저장하고 다음 단계가 이어서 빌드합니다.
 
 릴리스 키로 서명하려면 `BLENDER_ANDROID_KEYSTORE`, `BLENDER_ANDROID_KEYSTORE_PASSWORD`,
 `BLENDER_ANDROID_KEY_ALIAS`, `BLENDER_ANDROID_KEY_PASSWORD` 환경 변수를 설정하세요 (없으면 디버그 키로 서명).
@@ -174,6 +188,13 @@ deps/                        의존성 크로스 컴파일 (CMake superbuild)
   cmake/libs_python.cmake    CPython 3.13 (+OpenSSL, libffi, SQLite, xz, bzip2)
   cmake/libs_core.cmake      이미지/색 관리/압축/기하 라이브러리
   cmake/libs_gpu.cmake       Vulkan 헤더, shaderc, SDL3
+  cmake/libs_python_packages.cmake  NumPy, requests 등 Python 패키지
+  cmake/libs_media.cmake     FFmpeg과 코덱(x264, x265, libvpx, aom, Opus, Vorbis …), libsndfile
+  cmake/libs_misc.cmake      HarfBuzz, FriBidi, libharu, Draco, meshoptimizer, Ceres, Rubberband
+  cmake/libs_render.cmake    Embree, OpenPGL, Open Image Denoise (ISPC)
+  cmake/libs_scene.cmake     OpenVDB/NanoVDB, Blosc, Alembic, MaterialX
+  cmake/libs_usd.cmake       USD
+  patches/                   Android용 의존성 패치
 blender/
   android_config.cmake       Blender CMake 옵션 (Android용)
   overlay/                   Blender 소스에 추가되는 새 파일
@@ -202,6 +223,15 @@ scripts/                     빌드 스크립트
   Android 앱은 네이티브 라이브러리 폴더의 파일만 실행할 수 있으므로 Python 실행 파일(`sys.executable`, 확장
   플랫폼 등 하위 프로세스용)을 `libblender_python.so`라는 이름으로 함께 패키징합니다. stdout/stderr는 logcat으로
   전달됩니다.
+- **USD**: 정적 모놀리식 라이브러리(`usd_m`)를 통째로(`--whole-archive`) `libblender.so`에 링크합니다(타입·플러그인이
+  정적 생성자로 등록됨). Python 지원은 Blender에 내장된 Python을 쓰고, Python 모듈(`pxr`)은 정적 라이브러리를
+  복제하게 되므로 빌드하지 않습니다. 플러그인 정보(`plugInfo.json`)와 MaterialX 표준 라이브러리는 데이터 파일과 함께
+  설치되어 Blender가 USD를 처음 사용할 때 등록합니다. bionic에 없는 glibc 전용 기능(`NOFILE`, `__environ`)과 FFmpeg의
+  libaom과 충돌하는 USD의 AVIF 플러그인은 패치로 처리합니다(`deps/patches/usd_android.diff`).
+- **Open Image Denoise**: CPU 커널은 ISPC로 컴파일합니다(Android/ARM64를 지원하는 ISPC 릴리스 바이너리 사용).
+  bionic에 없는 `pthread_*affinity_np` 대신 `sched_*affinity`를 사용합니다(`deps/patches/oidn_android.diff`).
+- **크래시 리포트**: API 33 미만에는 `execinfo.h`가 없어 C++ 런타임의 언와인더로 백트레이스를 기록합니다
+  (라이브러리 + 오프셋, `llvm-addr2line -f -C -e libblender.so <오프셋>`으로 해석).
 - **데이터 파일**: `datafiles`, `scripts`, Python 표준 라이브러리를 `blender_data.zip`으로 APK에 넣고
   첫 실행 시 내부 저장소에 풀어 `BLENDER_SYSTEM_RESOURCES`로 지정합니다.
 
