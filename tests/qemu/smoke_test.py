@@ -15,6 +15,11 @@ import time
 
 import bpy
 
+# On Android, Python redirects `sys.stdout` & `sys.stderr` to the system log (logcat) when
+# embedded in an app. Under QEMU there is no logcat, restore the original streams.
+sys.stdout = sys.__stdout__
+sys.stderr = sys.__stderr__
+
 
 def log(message):
     print("[smoke-test] " + message, flush=True)
