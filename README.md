@@ -17,6 +17,33 @@ Vulkan, recommended: Galaxy Z Fold 8 Ultra). The native UI runs on an SDL3-based
 Vulkan GPU back-end, the Python 3.13 standard library is linked statically, and all dependencies are
 cross-compiled from source. Optional components (USD's Python modules, Python packages with pip) can be
 installed after the APK. See "Build" below. This project was made purely with Claude Opus 5.5 (Claude Code).*
+*Download: [Blender-5.2.2-android-arm64-v8a.apk](https://github.com/SakkijarvenPolkka/Blender-for-Android-by-claude/releases/latest/download/Blender-5.2.2-android-arm64-v8a.apk) ([all releases](https://github.com/SakkijarvenPolkka/Blender-for-Android-by-claude/releases)).*
+
+---
+
+## 다운로드
+
+[![최신 릴리스](https://img.shields.io/github/v/release/SakkijarvenPolkka/Blender-for-Android-by-claude?label=%EC%B5%9C%EC%8B%A0%20%EB%A6%B4%EB%A6%AC%EC%8A%A4&logo=android)](https://github.com/SakkijarvenPolkka/Blender-for-Android-by-claude/releases/latest)
+
+### **[⬇ Blender-5.2.2-android-arm64-v8a.apk 다운로드 (최신 빌드, 약 230MB)](https://github.com/SakkijarvenPolkka/Blender-for-Android-by-claude/releases/latest/download/Blender-5.2.2-android-arm64-v8a.apk)**
+
+[모든 릴리스](https://github.com/SakkijarvenPolkka/Blender-for-Android-by-claude/releases) — 기본 브랜치의 CI 빌드가 성공할 때마다(QEMU 테스트 통과 후) APK와 추가 구성 요소가
+릴리스로 자동 게시됩니다.
+
+**설치 방법**
+
+1. 휴대폰 브라우저에서 위 링크를 눌러 APK를 받고, 다운로드 알림이나 *내 파일* 앱에서 엽니다.
+   (PC에서는 `adb install -r Blender-5.2.2-android-arm64-v8a.apk`)
+2. "출처를 알 수 없는 앱" 설치를 묻는 경우 브라우저(또는 *내 파일*)에 설치 권한을 허용합니다.
+   Play 프로텍트 경고가 나오면 *세부정보 → 무시하고 설치*를 선택합니다 (Play 스토어 밖에서 배포되는 앱이기 때문).
+3. 첫 실행 시 Blender 데이터(약 210MB)를 설치합니다. 파일 접근 권한을 허용하면 기기의 모든 폴더에서 `.blend`
+   파일을 열고 저장할 수 있습니다.
+4. 필요하면 **편집 → Android Components**에서 추가 구성 요소(USD Python 모듈, Python 패키지)를 설치합니다
+   (아래 "추가 구성 요소").
+
+> **업데이트:** 새 빌드를 설치할 때 "기존 패키지와 충돌" 오류가 나면 서명 키가 다른 빌드입니다(릴리스 서명 키가
+> 설정되기 전의 CI 빌드는 빌드마다 다른 키로 서명됨). 기존 앱을 삭제한 뒤 설치하세요. 내부 저장소의 Blender
+> 설정·추가 구성 요소는 삭제되며, 기기 저장소에 저장한 `.blend` 파일은 유지됩니다.
 
 ---
 
@@ -129,8 +156,8 @@ APK에 포함하지 않은 기능은 앱을 설치한 뒤 Blender 안에서 추�
 - 구성 요소는 사용자 데이터 폴더(`…/datafiles/android_components`)에 설치되어 앱을 업데이트해도 유지되고,
   시작할 때 Python 경로에 추가됩니다. 목록에서 **Remove**로 삭제합니다.
 - 네이티브 코드가 들어 있는 구성 요소는 **같은 빌드의 앱**(`libblender.so`)에 맞춰 빌드됩니다. 빌드 식별자(ABI,
-  애드온 화면 아래쪽에 표시)가 다르면 설치를 거부하므로 앱과 같은 릴리스의 파일을 사용하세요. 앱은
-  자신의 버전 태그(`v5.2.2-android.<리비전>`) 릴리스에서 `components.json`을 받아 설치할 구성 요소를 찾습니다.
+  애드온 화면 아래쪽에 표시)가 다르면 설치를 거부하므로 앱과 같은 릴리스의 파일을 사용하세요. 앱은 자신이 게시된
+  릴리스(예: `v5.2.2-android.1-build.17`)에서 `components.json`을 받아 설치할 구성 요소를 찾습니다.
 - Claude(MCP)나 스크립트에서도 설치할 수 있습니다:
   ```python
   import android_components
@@ -230,8 +257,9 @@ adb install -r _work/out/Blender-5.2.2-android-arm64-v8a.apk
 
 모든 결과물은 `_work/` 아래에 생성됩니다 (`WORK_DIR` 환경 변수로 변경 가능). GitHub Actions
 (`.github/workflows/build-apk.yml`)도 같은 스크립트로 APK와 추가 구성 요소를 빌드해 아티팩트로 올립니다.
-`v*` 태그를 푸시하면 릴리스에 APK와 구성 요소(`*.zip`, `components.json`)가 첨부되어, 앱이 그 릴리스에서
-구성 요소를 내려받습니다.
+기본 브랜치의 빌드가 성공하면 APK와 구성 요소(`*.zip`, `components.json`)를 릴리스
+`v<버전>-android.<리비전>-build.<실행 번호>`로 게시하고(최근 10개 유지), `v*` 태그를 푸시하면 그 태그의 릴리스로
+게시합니다. 앱은 자신이 게시된 릴리스에서 구성 요소를 내려받습니다.
 
 의존성은 설치될 때마다 설정 해시를 `LIBDIR/.deps/`에 기록하므로, 캐시된 `LIBDIR`에서는 추가·변경된 의존성만
 빌드합니다. CI는 GitHub 호스트 러너의 6시간 제한 안에 끝나도록 단계를 나눕니다: 의존성(`deps.yml`)과
@@ -240,6 +268,21 @@ Blender(`blender.yml`) 모두 시간 제한(`DEPS_TIME_LIMIT`, `BLENDER_TIME_LIM
 
 릴리스 키로 서명하려면 `BLENDER_ANDROID_KEYSTORE`, `BLENDER_ANDROID_KEYSTORE_PASSWORD`,
 `BLENDER_ANDROID_KEY_ALIAS`, `BLENDER_ANDROID_KEY_PASSWORD` 환경 변수를 설정하세요 (없으면 디버그 키로 서명).
+
+CI 빌드를 항상 같은 키로 서명하려면(앱을 삭제하지 않고 업데이트 가능) 키를 만들어 저장소의
+*Settings → Secrets and variables → Actions*에 등록합니다. 키 파일은 저장소에 커밋하지 마세요.
+
+```sh
+keytool -genkeypair -v -keystore blender-android.keystore -alias blender -keyalg RSA -keysize 4096 -validity 10000
+base64 -w0 blender-android.keystore   # → BLENDER_ANDROID_KEYSTORE_BASE64
+```
+
+| 시크릿 | 값 |
+| --- | --- |
+| `BLENDER_ANDROID_KEYSTORE_BASE64` | 키 저장소 파일의 base64 |
+| `BLENDER_ANDROID_KEYSTORE_PASSWORD` | 키 저장소 비밀번호 |
+| `BLENDER_ANDROID_KEY_ALIAS` | 키 별칭 (위 예: `blender`) |
+| `BLENDER_ANDROID_KEY_PASSWORD` | 키 비밀번호 |
 
 ---
 

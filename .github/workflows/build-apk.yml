@@ -13,6 +13,9 @@ concurrency:
   # the running build instead of cancelling it (only the latest waiting build is kept).
   cancel-in-progress: false
 
+# Successful builds of the default branch & tags `v*` are published as GitHub releases (APK and
+# optional components), linked from the README.
+#
 # The work is split in stages that each fit in a job (6 hours on GitHub-hosted runners) and
 # continue from the caches of the previous stage. Later stages are skipped when there's nothing
 # left to do (e.g. dependencies found in the cache).
@@ -38,9 +41,12 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/blender.yml
+    # Signing key of the APK (optional).
+    secrets: inherit
     with:
       stage: 1
       deps-cache-key: ${{ needs.deps-1.outputs.cache-key }}
+      publish: ${{ github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref_name == github.event.repository.default_branch) }}
 
   blender-2:
     needs: [deps-1, blender-1]
@@ -48,10 +54,12 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/blender.yml
+    secrets: inherit
     with:
       stage: 2
       deps-cache-key: ${{ needs.deps-1.outputs.cache-key }}
       last-stage: true
+      publish: ${{ github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref_name == github.event.repository.default_branch) }}
 
   # Optional components (USD's Python modules), linked against the `libblender.so` of the APK.
   components:
@@ -64,3 +72,4 @@ jobs:
     uses: ./.github/workflows/components.yml
     with:
       deps-cache-key: ${{ needs.deps-1.outputs.cache-key }}
+      publish: ${{ github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref_name == github.event.repository.default_branch) }}

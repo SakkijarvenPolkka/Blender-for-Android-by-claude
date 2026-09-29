@@ -18,6 +18,21 @@ on:
         description: Fail when the build is still incomplete after this stage
         type: boolean
         default: false
+      publish:
+        description: Publish the APK as a GitHub release (see `build-apk.yml`)
+        type: boolean
+        default: false
+    secrets:
+      # Release signing key (optional), see README: without it the APK is signed with the debug
+      # key of the build machine, which changes with each build.
+      BLENDER_ANDROID_KEYSTORE_BASE64:
+        required: false
+      BLENDER_ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      BLENDER_ANDROID_KEY_ALIAS:
+        required: false
+      BLENDER_ANDROID_KEY_PASSWORD:
+        required: false
     outputs:
       complete:
         description: "'true' when the APK was built"
@@ -34,8 +49,6 @@ jobs:
       complete: ${{ steps.result.outputs.complete }}
     env:
       WORK_DIR: ${{ github.workspace }}/_work
-      # Release the application downloads its optional components from (tags `v*`).
-      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
       CCACHE_DIR: ${{ github.workspace }}/_work/ccache
       CCACHE_MAXSIZE: 3G
       CCACHE_COMPRESS: "1"
@@ -90,6 +103,19 @@ jobs:
         # Only checks that the cached dependencies are up to date.
         run: ./scripts/build_deps.sh
 
+      # Release of this build (the application downloads its optional components from it): the
+      # tag `v*` that was pushed, or one per published build of the default branch.
+      - name: Release tag
+        run: |
+          source scripts/env.sh
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          elif [ "${{ inputs.publish }}" = "true" ]; then
+            RELEASE_TAG="v${BLENDER_VERSION}-android.${PORT_REVISION}-build.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "${GITHUB_ENV}"
+          echo "Release: ${RELEASE_TAG}"
+
       - name: Blender
         id: build
         env:
@@ -116,7 +142,21 @@ jobs:
 
       - name: APK
         if: steps.build.outputs.status == '0'
-        run: ./scripts/package_apk.sh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BLENDER_ANDROID_KEYSTORE_BASE64 }}
+          BLENDER_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.BLENDER_ANDROID_KEYSTORE_PASSWORD }}
+          BLENDER_ANDROID_KEY_ALIAS: ${{ secrets.BLENDER_ANDROID_KEY_ALIAS }}
+          BLENDER_ANDROID_KEY_PASSWORD: ${{ secrets.BLENDER_ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "${KEYSTORE_BASE64}" ]; then
+            echo "${KEYSTORE_BASE64}" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+            export BLENDER_ANDROID_KEYSTORE="${RUNNER_TEMP}/release.keystore"
+            echo "Signing with the release key"
+          else
+            echo "::warning::No release key (BLENDER_ANDROID_KEYSTORE_BASE64), signing with a debug key"
+          fi
+          ./scripts/package_apk.sh
+          rm -f "${RUNNER_TEMP}/release.keystore"
 
       - uses: actions/upload-artifact@v4
         if: steps.build.outputs.status == '0'
@@ -144,11 +184,42 @@ jobs:
           retention-days: 3
           if-no-files-found: error
 
+      - name: Release notes
+        if: steps.build.outputs.status == '0' && inputs.publish
+        run: |
+          source scripts/env.sh
+          apk="Blender-${BLENDER_VERSION}-android-${ANDROID_ABI}.apk"
+          cat > _work/release_notes.md <<EOF
+          Blender ${BLENDER_VERSION} for Android (arm64-v8a), build of ${GITHUB_SHA::12}.
+
+          **Install:** download \`${apk}\` on the phone (Android 12+, Galaxy S22 or newer, recommended:
+          Galaxy Z Fold 8 Ultra) and open it, or \`adb install -r ${apk}\`. See the
+          [README](https://github.com/${GITHUB_REPOSITORY}#readme) for details.
+
+          **Optional components** (USD Python modules \`pxr\`, pip packages) are installed from Blender:
+          *Edit > Android Components*. The files of this release (\`components.json\`, \`*.zip\`) are
+          made for this APK.
+
+          Made purely with Claude Opus 5.5 (Claude Code).
+
+          ---
+
+          **설치:** 휴대폰에서 \`${apk}\`를 받아 열거나 \`adb install -r ${apk}\` (Android 12 이상,
+          Galaxy S22 이상, 권장: Galaxy Z Fold 8 Ultra). **추가 구성 요소**(USD Python 모듈, pip 패키지)는
+          Blender의 *편집 > Android Components*에서 이 릴리스의 파일로 설치합니다.
+          이 프로젝트는 순수하게 Claude Opus 5.5만을 활용해 만든 프로젝트입니다.
+          EOF
+
       - name: Release
-        if: steps.build.outputs.status == '0' && startsWith(github.ref, 'refs/tags/v')
+        if: steps.build.outputs.status == '0' && inputs.publish
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ env.RELEASE_TAG }}
+          body_path: _work/release_notes.md
           files: _work/out/*.apk
+          make_latest: "true"
 
       - name: Result
         id: result

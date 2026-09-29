@@ -1,6 +1,6 @@
 # Builds the optional components (installed after the application from Blender, `Edit > Android
-# Components`) against the `libblender.so` of the APK, called by `build-apk.yml`. On tags `v*` they
-# are attached to the release, where the application downloads them from.
+# Components`) against the `libblender.so` of the APK, called by `build-apk.yml`. Published builds
+# attach them to the release of the APK, where the application downloads them from.
 
 name: Components
 
@@ -10,6 +10,10 @@ on:
       deps-cache-key:
         type: string
         required: true
+      publish:
+        description: Attach the components to the release of the APK (see `blender.yml`)
+        type: boolean
+        default: false
 
 jobs:
   components:
@@ -65,6 +69,9 @@ jobs:
       - name: Components
         run: |
           source scripts/env.sh
+          RELEASE_TAG="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["release_tag"])' \
+            _work/components-input/build_info.json)"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "${GITHUB_ENV}"
           mkdir -p "${BLENDER_BUILD_DIR}/lib" "${BLENDER_INSTALL_DIR}/${BLENDER_VERSION_SHORT}/datafiles/android"
           mv _work/components-input/libblender.so "${BLENDER_BUILD_DIR}/lib/"
           mv _work/components-input/build_info.json \
@@ -78,9 +85,24 @@ jobs:
           if-no-files-found: error
 
       - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.publish
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
             _work/out/components/*.zip
             _work/out/components/components.json
+
+      # Keeps the latest published builds of the default branch (releases of tags `v*` are kept).
+      - name: Remove old builds
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --repo "${GITHUB_REPOSITORY}" --limit 200 --json tagName \
+              --jq '.[].tagName | select(test("-build\\.[0-9]+$"))' \
+            | tail -n +11 \
+            | while read -r tag; do
+                echo "Removing ${tag}"
+                gh release delete "${tag}" --repo "${GITHUB_REPOSITORY}" --cleanup-tag --yes
+              done
