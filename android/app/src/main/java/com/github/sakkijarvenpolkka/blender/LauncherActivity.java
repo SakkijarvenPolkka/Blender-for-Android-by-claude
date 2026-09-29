@@ -3,6 +3,7 @@ package com.github.sakkijarvenpolkka.blender;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -34,8 +35,11 @@ import java.io.OutputStream;
 public class LauncherActivity extends Activity {
     private static final String TAG = "BlenderLauncher";
     private static final int REQUEST_ALL_FILES_ACCESS = 1;
-    /** Vulkan 1.1, encoded as for `android.hardware.vulkan.version`. */
-    private static final int VULKAN_1_1 = 0x401000;
+    /**
+     * Vulkan 1.2 (timeline semaphores, buffer device address ...), encoded as for
+     * `android.hardware.vulkan.version`.
+     */
+    private static final int VULKAN_1_2 = 0x402000;
 
     static final String PREFS = "blender";
     static final String PREF_ASKED_STORAGE = "asked_all_files_access";
@@ -51,25 +55,57 @@ public class LauncherActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(createLayout());
 
-        blendFile = resolveBlendFile(getIntent());
-
-        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_VULKAN_HARDWARE_VERSION, VULKAN_1_1)) {
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_VULKAN_HARDWARE_VERSION, VULKAN_1_2)) {
             showFatal(getString(R.string.error_no_vulkan));
             return;
         }
 
-        if (DataInstaller.isInstalled(this)) {
-            afterInstall();
-        } else {
-            installData();
+        // Copying an opened file and extracting the data can take a while, not on the UI thread.
+        final Intent intent = getIntent();
+        final boolean installed = DataInstaller.isInstalled(this);
+        if (!installed) {
+            status.setText(R.string.launcher_installing);
         }
+        final Context appContext = getApplicationContext();
+        new Thread(() -> {
+            String file = resolveBlendFile(intent);
+            try {
+                if (!installed) {
+                    DataInstaller.install(appContext, (fraction, name) ->
+                        runOnUi(() -> progress.setProgress((int) (fraction * 1000))));
+                }
+                runOnUi(() -> {
+                    if (blendFile == null) {
+                        blendFile = file;
+                    }
+                    afterInstall();
+                });
+            } catch (IOException e) {
+                Log.e(TAG, "Installing data failed", e);
+                runOnUi(() -> showFatal(getString(R.string.error_install, e.getMessage())));
+            }
+        }, "BlenderLauncher").start();
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        blendFile = resolveBlendFile(intent);
+        new Thread(() -> {
+            String file = resolveBlendFile(intent);
+            if (file != null) {
+                runOnUi(() -> blendFile = file);
+            }
+        }, "BlenderLauncherIntent").start();
+    }
+
+    /** Run on the UI thread, unless the activity is gone by then. */
+    private void runOnUi(Runnable runnable) {
+        handler.post(() -> {
+            if (!isFinishing() && !isDestroyed()) {
+                runnable.run();
+            }
+        });
     }
 
     private ViewGroup createLayout() {
@@ -108,21 +144,6 @@ public class LauncherActivity extends Activity {
         status.setText(R.string.launcher_starting);
         layout.addView(status);
         return layout;
-    }
-
-    private void installData() {
-        status.setText(R.string.launcher_installing);
-        Thread thread = new Thread(() -> {
-            try {
-                DataInstaller.install(this, (fraction, file) ->
-                    handler.post(() -> progress.setProgress((int) (fraction * 1000))));
-                handler.post(this::afterInstall);
-            } catch (IOException e) {
-                Log.e(TAG, "Installing data failed", e);
-                handler.post(() -> showFatal(getString(R.string.error_install, e.getMessage())));
-            }
-        }, "BlenderDataInstaller");
-        thread.start();
     }
 
     private void afterInstall() {
@@ -182,7 +203,10 @@ public class LauncherActivity extends Activity {
             .show();
     }
 
-    /** Returns a file system path for a `.blend` file passed with a VIEW intent. */
+    /**
+     * Returns a file system path for a `.blend` file passed with a VIEW intent.
+     * Called on a worker thread (content URIs are copied).
+     */
     private String resolveBlendFile(Intent intent) {
         if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null) {
             return null;

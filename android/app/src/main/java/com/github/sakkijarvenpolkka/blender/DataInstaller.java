@@ -74,7 +74,14 @@ final class DataInstaller {
         file.delete();
     }
 
-    static void install(Context context, Progress progress) throws IOException {
+    /**
+     * Extract the data, only once at a time: an activity re-created while installing waits
+     * for the running installation.
+     */
+    static synchronized void install(Context context, Progress progress) throws IOException {
+        if (isInstalled(context)) {
+            return;
+        }
         File root = BlenderPaths.dataRoot(context);
         File staging = new File(context.getFilesDir(), "blender.staging");
         deleteRecursive(staging);

@@ -122,31 +122,6 @@ JNIEXPORT void JNICALL Java_org_blender_ghost_GhostAndroid_openFile(JNIEnv *env,
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name IME Event
- *
- * Owns a copy of the IME data, multiple events may be queued before they are handled.
- * \{ */
-
-#ifdef WITH_INPUT_IME
-class GHOST_EventIMEAndroid : public GHOST_Event {
- public:
-  GHOST_EventIMEAndroid(uint64_t msec,
-                        GHOST_TEventType type,
-                        GHOST_IWindow *window,
-                        const GHOST_TEventImeData &ime_data)
-      : GHOST_Event(msec, type, window), ime_data_(ime_data)
-  {
-    data_ = &ime_data_;
-  }
-
- private:
-  GHOST_TEventImeData ime_data_;
-};
-#endif
-
-/** \} */
-
-/* -------------------------------------------------------------------- */
 /** \name System
  * \{ */
 
@@ -265,6 +240,18 @@ GHOST_TSuccess GHOST_SystemAndroid::disposeContext(GHOST_IContext *context)
 {
   delete context;
   return GHOST_kSuccess;
+}
+
+GHOST_TSuccess GHOST_SystemAndroid::disposeWindow(GHOST_IWindow *window)
+{
+  if (window == window_) {
+    window_ = nullptr;
+  }
+  dirty_windows_.erase(std::remove(dirty_windows_.begin(),
+                                   dirty_windows_.end(),
+                                   static_cast<GHOST_WindowAndroid *>(window)),
+                       dirty_windows_.end());
+  return GHOST_System::disposeWindow(window);
 }
 
 void GHOST_SystemAndroid::addDirtyWindow(GHOST_WindowAndroid *window)
@@ -444,13 +431,14 @@ bool GHOST_SystemAndroid::processEvents(bool waitForEvent)
       processEvent(sdl_event);
       any_processed = true;
     }
+    flushPenMotion();
 
     if (processTouchTimers(getMilliSeconds())) {
       any_processed = true;
     }
 
-    /* The surface can change when the activity is paused and resumed. */
-    if (window_ && window_->updateNativeWindow()) {
+    /* The size can change without an event (e.g. while the activity is paused). */
+    if (window_ && window_->updateSize()) {
       pushEvent(
           std::make_unique<GHOST_Event>(getMilliSeconds(), GHOST_kEventWindowSize, window_));
       any_processed = true;
@@ -466,6 +454,11 @@ bool GHOST_SystemAndroid::processEvents(bool waitForEvent)
 
 void GHOST_SystemAndroid::processEvent(const SDL_Event &event)
 {
+  /* A pen motion is followed by its pressure (when it changed). */
+  if (event.type != SDL_EVENT_PEN_AXIS) {
+    flushPenMotion();
+  }
+
   switch (event.type) {
     case SDL_EVENT_QUIT: {
       pushEvent(std::make_unique<GHOST_Event>(
@@ -494,7 +487,7 @@ void GHOST_SystemAndroid::processEvent(const SDL_Event &event)
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED: {
       if (window_) {
-        window_->updateNativeWindow();
+        window_->updateSize();
         pushEvent(std::make_unique<GHOST_Event>(
             SDL_NS_TO_MS(event.window.timestamp), GHOST_kEventWindowSize, window_));
         if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) {
@@ -534,9 +527,8 @@ void GHOST_SystemAndroid::processEvent(const SDL_Event &event)
       break;
     }
 
-    case SDL_EVENT_TEXT_INPUT:
-    case SDL_EVENT_TEXT_EDITING: {
-      processTextEvent(event);
+    case SDL_EVENT_TEXT_INPUT: {
+      processTextEvent(event.text);
       break;
     }
 
@@ -614,8 +606,10 @@ void GHOST_SystemAndroid::processLifecycleEvent(const SDL_Event &event)
   switch (event.type) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND: {
       CLOG_INFO(&LOG, "Entering background");
+      /* SDL blocks when events are polled the next time, until then nothing can be presented:
+       * the surface is destroyed any time from now on. */
       if (window_) {
-        window_->surfaceMayHaveChanged();
+        window_->setSurfaceAvailable(false);
       }
       if (g_lifecycle_callback) {
         g_lifecycle_callback(GHOST_kAndroidLifecycleEnterBackground);
@@ -624,9 +618,10 @@ void GHOST_SystemAndroid::processLifecycleEvent(const SDL_Event &event)
     }
     case SDL_EVENT_DID_ENTER_FOREGROUND: {
       CLOG_INFO(&LOG, "Entered foreground");
+      /* SDL only resumes once the activity has a (new) surface. */
       if (window_) {
-        window_->surfaceMayHaveChanged();
-        window_->updateNativeWindow();
+        window_->updateSize();
+        window_->setSurfaceAvailable(true);
         window_->invalidate();
       }
       if (g_lifecycle_callback) {
@@ -855,21 +850,42 @@ static bool utf8_from_codepoint(uint32_t codepoint, char r_utf8[6])
   return true;
 }
 
+/**
+ * Keyboard ID of key presses simulated by SDL for characters typed with the virtual keyboard
+ * (`SDLInputConnection.updateText` calls `nativeGenerateScancodeForUnichar` for ASCII characters,
+ * in addition to sending the text).
+ */
+static constexpr SDL_KeyboardID KEYBOARD_ID_SDL_SIMULATED = 0;
+
 void GHOST_SystemAndroid::processKeyEvent(const SDL_KeyboardEvent &event)
 {
   if (window_ == nullptr) {
     return;
   }
+  const GHOST_WindowAndroid::TextInputMode text_input_mode = window_->getTextInputMode();
   const uint64_t time_ms = SDL_NS_TO_MS(event.timestamp);
   const GHOST_TEventType type = event.down ? GHOST_kEventKeyDown : GHOST_kEventKeyUp;
   const GHOST_TKey key = convert_sdl_scancode(event.scancode);
 
-  /* Text is sent as #SDL_EVENT_TEXT_INPUT while text input is active (virtual keyboard or IME),
-   * otherwise it's derived from the key-code using the current keyboard layout. */
+  if (text_input_mode == GHOST_WindowAndroid::TextInputMode::IME &&
+      event.which == KEYBOARD_ID_SDL_SIMULATED)
+  {
+    /* Editing text: the text is sent separately (see #processTextEvent), only keep simulated
+     * editing keys (backspace, return, tab) and modifiers. */
+    const SDL_Keycode keycode = SDL_GetKeyFromScancode(event.scancode, SDL_KMOD_NONE, false);
+    if (keycode >= 0x20 && keycode < 0x7f) {
+      return;
+    }
+  }
+
+  /* Derive the text from the key-code using the current keyboard layout,
+   * unless editing text: then the text is sent as #SDL_EVENT_TEXT_INPUT. */
   char utf8_buf[sizeof(GHOST_TEventKeyData::utf8_buf)] = {'\0'};
   const bool has_command_modifier = (event.mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI)) !=
                                     0;
-  if (event.down && !window_->isTextInputActive() && !has_command_modifier) {
+  if (event.down && text_input_mode != GHOST_WindowAndroid::TextInputMode::IME &&
+      !has_command_modifier)
+  {
     const SDL_Keycode keycode = SDL_GetKeyFromScancode(event.scancode, event.mod, false);
     utf8_from_codepoint(uint32_t(keycode), utf8_buf);
   }
@@ -880,198 +896,60 @@ void GHOST_SystemAndroid::processKeyEvent(const SDL_KeyboardEvent &event)
       time_ms, type, window_, key, event.repeat != 0, utf8_buf));
 }
 
-void GHOST_SystemAndroid::processTextEvent(const SDL_Event &event)
+/** Byte length of the UTF-8 sequence starting with `c`, zero for an invalid lead byte. */
+static int utf8_sequence_length(const uint8_t c)
 {
-#ifdef WITH_INPUT_IME
-  if (window_ == nullptr) {
-    return;
+  if (c < 0x80) {
+    return 1;
   }
-  bool &is_composing = ime_is_composing_;
-  if (window_->getTextInputMode() == GHOST_WindowAndroid::TextInputMode::Hotkeys) {
-    if (event.type == SDL_EVENT_TEXT_INPUT && event.text.text) {
-      processHotkeyText(event.text.text, SDL_NS_TO_MS(event.text.timestamp));
-    }
-    return;
+  if ((c & 0xE0) == 0xC0) {
+    return 2;
   }
-  if (event.type == SDL_EVENT_TEXT_INPUT) {
-    const uint64_t time_ms = SDL_NS_TO_MS(event.text.timestamp);
-    GHOST_TEventImeData data;
-    data.result = event.text.text ? event.text.text : "";
-    data.cursor_position = -1;
-    data.target_start = -1;
-    data.target_end = -1;
-    if (!is_composing) {
-      pushEvent(std::make_unique<GHOST_EventIMEAndroid>(
-          time_ms, GHOST_kEventImeCompositionStart, window_, data));
-    }
-    pushEvent(std::make_unique<GHOST_EventIMEAndroid>(
-        time_ms, GHOST_kEventImeComposition, window_, data));
-    pushEvent(std::make_unique<GHOST_EventIMEAndroid>(
-        time_ms, GHOST_kEventImeCompositionEnd, window_, data));
-    is_composing = false;
+  if ((c & 0xF0) == 0xE0) {
+    return 3;
   }
-  else if (event.type == SDL_EVENT_TEXT_EDITING) {
-    const uint64_t time_ms = SDL_NS_TO_MS(event.edit.timestamp);
-    GHOST_TEventImeData data;
-    data.composite = event.edit.text ? event.edit.text : "";
-    data.cursor_position = event.edit.start;
-    data.target_start = event.edit.start;
-    data.target_end = event.edit.start + std::max(0, int(event.edit.length));
-    if (data.composite.empty()) {
-      if (is_composing) {
-        pushEvent(std::make_unique<GHOST_EventIMEAndroid>(
-            time_ms, GHOST_kEventImeCompositionEnd, window_, data));
-        is_composing = false;
-      }
-      return;
-    }
-    pushEvent(std::make_unique<GHOST_EventIMEAndroid>(
-        time_ms,
-        is_composing ? GHOST_kEventImeComposition : GHOST_kEventImeCompositionStart,
-        window_,
-        data));
-    is_composing = true;
+  if ((c & 0xF8) == 0xF0) {
+    return 4;
   }
-#else
-  (void)event;
-#endif
+  return 0;
 }
 
-/** Key for a character typed with the virtual keyboard (US layout). */
-static GHOST_TKey hotkey_from_char(char c, bool &r_shift)
+void GHOST_SystemAndroid::processTextEvent(const SDL_TextInputEvent &event)
 {
-  r_shift = false;
-  if (c >= 'a' && c <= 'z') {
-    return GHOST_TKey(int(GHOST_kKeyA) + (c - 'a'));
-  }
-  if (c >= 'A' && c <= 'Z') {
-    r_shift = true;
-    return GHOST_TKey(int(GHOST_kKeyA) + (c - 'A'));
-  }
-  if (c >= '1' && c <= '9') {
-    return GHOST_TKey(int(GHOST_kKey1) + (c - '1'));
-  }
-  switch (c) {
-    case '0':
-      return GHOST_kKey0;
-    case ' ':
-      return GHOST_kKeySpace;
-    case '.':
-      return GHOST_kKeyPeriod;
-    case ',':
-      return GHOST_kKeyComma;
-    case '-':
-      return GHOST_kKeyMinus;
-    case '=':
-      return GHOST_kKeyEqual;
-    case '/':
-      return GHOST_kKeySlash;
-    case '\\':
-      return GHOST_kKeyBackslash;
-    case ';':
-      return GHOST_kKeySemicolon;
-    case '\'':
-      return GHOST_kKeyQuote;
-    case '`':
-      return GHOST_kKeyAccentGrave;
-    case '[':
-      return GHOST_kKeyLeftBracket;
-    case ']':
-      return GHOST_kKeyRightBracket;
-    case '\n':
-      return GHOST_kKeyEnter;
-    case '\t':
-      return GHOST_kKeyTab;
-    case '~':
-      r_shift = true;
-      return GHOST_kKeyAccentGrave;
-    case '!':
-      r_shift = true;
-      return GHOST_kKey1;
-    case '@':
-      r_shift = true;
-      return GHOST_kKey2;
-    case '#':
-      r_shift = true;
-      return GHOST_kKey3;
-    case '$':
-      r_shift = true;
-      return GHOST_kKey4;
-    case '%':
-      r_shift = true;
-      return GHOST_kKey5;
-    case '^':
-      r_shift = true;
-      return GHOST_kKey6;
-    case '&':
-      r_shift = true;
-      return GHOST_kKey7;
-    case '*':
-      r_shift = true;
-      return GHOST_kKey8;
-    case '(':
-      r_shift = true;
-      return GHOST_kKey9;
-    case ')':
-      r_shift = true;
-      return GHOST_kKey0;
-    case '_':
-      r_shift = true;
-      return GHOST_kKeyMinus;
-    case '+':
-      r_shift = true;
-      return GHOST_kKeyEqual;
-    case '?':
-      r_shift = true;
-      return GHOST_kKeySlash;
-    case '|':
-      r_shift = true;
-      return GHOST_kKeyBackslash;
-    case ':':
-      r_shift = true;
-      return GHOST_kKeySemicolon;
-    case '"':
-      r_shift = true;
-      return GHOST_kKeyQuote;
-    case '<':
-      r_shift = true;
-      return GHOST_kKeyComma;
-    case '>':
-      r_shift = true;
-      return GHOST_kKeyPeriod;
-    case '{':
-      r_shift = true;
-      return GHOST_kKeyLeftBracket;
-    case '}':
-      r_shift = true;
-      return GHOST_kKeyRightBracket;
-    default:
-      return GHOST_kKeyUnknown;
-  }
-}
-
-void GHOST_SystemAndroid::processHotkeyText(const char *text, uint64_t time_ms)
-{
-  if (window_ == nullptr) {
+  if (window_ == nullptr || event.text == nullptr) {
     return;
   }
-  for (const char *c = text; *c; c++) {
-    bool shift = false;
-    const GHOST_TKey key = hotkey_from_char(*c, shift);
-    if (key == GHOST_kKeyUnknown) {
-      /* Non ASCII characters don't map to keys. */
+  const GHOST_WindowAndroid::TextInputMode text_input_mode = window_->getTextInputMode();
+  const uint64_t time_ms = SDL_NS_TO_MS(event.timestamp);
+
+  /* Committed text is sent as key presses with text, as typed on a hardware keyboard: each event
+   * owns its text. IME composition events can't be used, the window manager stores a single
+   * composition per window, several commits handled together would overwrite each other.
+   * SDL doesn't report compositions (pre-edit text) on Android. */
+  const char *text = event.text;
+  while (*text) {
+    const int len = utf8_sequence_length(uint8_t(*text));
+    if (len == 0) {
+      text++;
       continue;
     }
-    const char utf8_buf[6] = {*c, '\0'};
-    if (shift) {
-      pushKey(time_ms, GHOST_kEventKeyDown, GHOST_kKeyLeftShift, false);
+    if (strnlen(text, size_t(len)) < size_t(len)) {
+      break;
     }
-    pushEvent(std::make_unique<GHOST_EventKey>(
-        time_ms, GHOST_kEventKeyDown, window_, key, false, utf8_buf));
-    pushKey(time_ms, GHOST_kEventKeyUp, key, false);
-    if (shift) {
-      pushKey(time_ms, GHOST_kEventKeyUp, GHOST_kKeyLeftShift, false);
+    /* Typing shortcuts, ASCII characters are also simulated as key presses by SDL
+     * (see #processKeyEvent). */
+    const bool is_simulated_key = (len == 1);
+    if (!(text_input_mode == GHOST_WindowAndroid::TextInputMode::Hotkeys && is_simulated_key) &&
+        uint8_t(text[0]) >= 0x20 && text[0] != 0x7f)
+    {
+      char utf8_buf[sizeof(GHOST_TEventKeyData::utf8_buf)] = {'\0'};
+      memcpy(utf8_buf, text, size_t(len));
+      pushEvent(std::make_unique<GHOST_EventKey>(
+          time_ms, GHOST_kEventKeyDown, window_, GHOST_kKeyUnknown, false, utf8_buf));
+      pushEvent(std::make_unique<GHOST_EventKey>(
+          time_ms, GHOST_kEventKeyUp, window_, GHOST_kKeyUnknown, false, nullptr));
     }
+    text += len;
   }
 }
 
@@ -1185,6 +1063,15 @@ void GHOST_SystemAndroid::processMouseEvent(const SDL_Event &event)
 /** \name Stylus (S Pen)
  * \{ */
 
+void GHOST_SystemAndroid::flushPenMotion()
+{
+  if (!pen_motion_pending_) {
+    return;
+  }
+  pen_motion_pending_ = false;
+  pushCursorMove(pen_motion_time_ms_, int32_t(cursor_[0]), int32_t(cursor_[1]), pen_tablet_);
+}
+
 void GHOST_SystemAndroid::processPenEvent(const SDL_Event &event)
 {
   if (window_ == nullptr) {
@@ -1217,6 +1104,7 @@ void GHOST_SystemAndroid::processPenEvent(const SDL_Event &event)
         default:
           break;
       }
+      flushPenMotion();
       break;
     }
     case SDL_EVENT_PEN_MOTION: {
@@ -1226,8 +1114,9 @@ void GHOST_SystemAndroid::processPenEvent(const SDL_Event &event)
       }
       cursor_[0] = motion.x * pixel_density;
       cursor_[1] = motion.y * pixel_density;
-      pushCursorMove(
-          SDL_NS_TO_MS(motion.timestamp), int32_t(cursor_[0]), int32_t(cursor_[1]), pen_tablet_);
+      /* Sent with the pressure that follows (see #processEvent). */
+      pen_motion_pending_ = true;
+      pen_motion_time_ms_ = SDL_NS_TO_MS(motion.timestamp);
       break;
     }
     case SDL_EVENT_PEN_DOWN:
@@ -1322,7 +1211,8 @@ void GHOST_SystemAndroid::touchGestureUpdate(uint64_t time_ms)
                          0.0f;
 
   if (gesture_kind_ == GestureKind::Undecided) {
-    gesture_travel_ += std::hypot(delta[0], delta[1]) / density;
+    /* The reference stays at the gesture start until the gesture is known. */
+    gesture_travel_ = std::hypot(delta[0], delta[1]) / density;
     const float pinch_travel = std::fabs(distance - gesture_distance_) / density;
     if (touches_.size() == 2 && pinch_travel > TOUCH_GESTURE_DECIDE_DP &&
         pinch_travel > gesture_travel_)

@@ -60,6 +60,8 @@ class GHOST_SystemAndroid : public GHOST_System {
   void getAllDisplayDimensions(uint32_t &width, uint32_t &height) const override;
   void getMainDisplayDimensions(uint32_t &width, uint32_t &height) const override;
 
+  GHOST_TSuccess disposeWindow(GHOST_IWindow *window) override;
+
   GHOST_IContext *createOffscreenContext(GHOST_GPUSettings gpu_settings) override;
   GHOST_TSuccess disposeContext(GHOST_IContext *context) override;
 
@@ -82,14 +84,12 @@ class GHOST_SystemAndroid : public GHOST_System {
 
   void processEvent(const SDL_Event &event);
   void processKeyEvent(const SDL_KeyboardEvent &event);
-  void processTextEvent(const SDL_Event &event);
+  void processTextEvent(const SDL_TextInputEvent &event);
   void processMouseEvent(const SDL_Event &event);
   void processPenEvent(const SDL_Event &event);
   void processFingerEvent(const SDL_TouchFingerEvent &event);
   void processLifecycleEvent(const SDL_Event &event);
   void processDropEvent(const char *filepath, uint64_t time_ms);
-  /** Send typed characters as key presses (virtual keyboard opened for shortcuts). */
-  void processHotkeyText(const char *text, uint64_t time_ms);
 
   /** Returns true when an event was generated. */
   bool processTouchTimers(uint64_t now_ms);
@@ -124,6 +124,13 @@ class GHOST_SystemAndroid : public GHOST_System {
 
   /* Stylus state. */
   GHOST_TabletData pen_tablet_ = GHOST_TABLET_DATA_NONE;
+  /**
+   * SDL sends the pressure after the motion (as #SDL_EVENT_PEN_AXIS), the cursor motion is sent
+   * once the pressure is known.
+   */
+  bool pen_motion_pending_ = false;
+  uint64_t pen_motion_time_ms_ = 0;
+  void flushPenMotion();
 
   /* Touch state. */
   struct TouchPoint {
@@ -154,9 +161,6 @@ class GHOST_SystemAndroid : public GHOST_System {
   float gesture_travel_ = 0.0f;
   float gesture_accum_[3] = {0.0f, 0.0f, 0.0f};
   bool gesture_shift_held_ = false;
-
-  /** An IME composition is in progress. */
-  bool ime_is_composing_ = false;
 
   void touchGestureBegin(uint64_t time_ms);
   void touchGestureUpdate(uint64_t time_ms);

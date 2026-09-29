@@ -18,6 +18,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <android/native_window.h>
+
 #include <string>
 
 class GHOST_SystemAndroid;
@@ -53,18 +55,17 @@ class GHOST_WindowAndroid : public GHOST_Window {
   }
 
   /**
-   * Update the cached native window handle & size from SDL.
+   * Update the cached size from SDL.
    * \return true when the size changed.
    */
-  bool updateNativeWindow();
+  bool updateSize();
 
-  /** The native surface may have been replaced (activity paused/resumed). */
-  void surfaceMayHaveChanged()
-  {
-#ifdef WITH_VULKAN_BACKEND
-    vulkan_window_info_.generation++;
-#endif
-  }
+  /**
+   * Take a reference to the activity's current native window (activity resumed), or release it
+   * (activity paused: the system destroys the surface at any time, even while the next frame is
+   * drawn, SDL doesn't keep the window alive for Vulkan).
+   */
+  void setSurfaceAvailable(bool available);
 
   /** Size of the drawable in pixels. */
   int getWidth() const
@@ -90,13 +91,10 @@ class GHOST_WindowAndroid : public GHOST_Window {
     /** Virtual keyboard opened by the user, typed characters are sent as key presses. */
     Hotkeys,
   };
+  /** The virtual keyboard can also be hidden by the system (e.g. "back"), check SDL's state. */
   TextInputMode getTextInputMode() const
   {
-    return text_input_mode_;
-  }
-  bool isTextInputActive() const
-  {
-    return text_input_mode_ != TextInputMode::None;
+    return SDL_TextInputActive(sdl_win_) ? text_input_mode_ : TextInputMode::None;
   }
   /** Show or hide the virtual keyboard for typing shortcuts. */
   void toggleVirtualKeyboard();
@@ -141,9 +139,13 @@ class GHOST_WindowAndroid : public GHOST_Window {
   bool invalid_window_ = false;
   TextInputMode text_input_mode_ = TextInputMode::None;
   void startTextInput();
+  void syncTextInputMode();
   std::string title_;
   int size_[2] = {0, 0};
   GHOST_GPUDevice preferred_device_;
+
+  /** Owned reference (#ANativeWindow_acquire), null while the activity is in the background. */
+  ANativeWindow *native_window_ = nullptr;
 
 #ifdef WITH_VULKAN_BACKEND
   GHOST_ContextVK_AndroidWindowInfo vulkan_window_info_;

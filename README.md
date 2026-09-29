@@ -1,7 +1,8 @@
 # Blender for Android (비공식 포팅)
 
 [Blender](https://www.blender.org) **5.2.2** (2026년 9월 기준 최신 안정 버전)를 Android(arm64)로 포팅하는 프로젝트입니다.
-**최소 사양은 Galaxy S22 시리즈**(Snapdragon 8 Gen 1 / Exynos 2200, Android 12 이상, Vulkan)입니다.
+**최소 사양은 Galaxy S22 시리즈**(Snapdragon 8 Gen 1 / Exynos 2200, Android 12 이상, Vulkan 1.2 이상)입니다.
+GPU 드라이버가 Vulkan 1.2를 지원해야 하므로 기기를 최신 One UI로 업데이트해 두세요.
 
 > 이 프로젝트는 Blender 재단과 관련이 없는 **비공식** 포팅입니다. "Blender"는 Blender 재단의 상표입니다.
 > 코드는 Blender와 같은 GPL 라이선스를 따릅니다.

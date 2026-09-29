@@ -171,7 +171,7 @@ index 8c3e57e..37c816b 100644
    list(APPEND SRC
      intern/GHOST_ContextSDL.cc
 diff --git a/intern/ghost/intern/GHOST_ContextVK.cc b/intern/ghost/intern/GHOST_ContextVK.cc
-index 7ccfafa..5bab57d 100644
+index 7ccfafa..59be79a 100644
 --- a/intern/ghost/intern/GHOST_ContextVK.cc
 +++ b/intern/ghost/intern/GHOST_ContextVK.cc
 @@ -21,6 +21,10 @@
@@ -337,7 +337,7 @@ index 7ccfafa..5bab57d 100644
  #endif
    }
    /* there is no valid swapchain when the previous window was minimized. User can have maximized
-@@ -964,6 +1044,23 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+@@ -964,8 +1044,38 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
                                               submission_frame_data.acquire_semaphore,
                                               VK_NULL_HANDLE,
                                               &image_index);
@@ -359,9 +359,24 @@ index 7ccfafa..5bab57d 100644
 +      }
 +#endif
        if (ELEM(acquire_result, VK_ERROR_OUT_OF_DATE_KHR, VK_SUBOPTIMAL_KHR)) {
++#ifdef __ANDROID__
++        if (recreateSwapchain(use_hdr_swapchain) != GHOST_kSuccess) {
++          /* The old swap-chain is retired even when creating the new one failed (surface
++           * abandoned by the system), acquiring from it would fail forever. */
++          if (swapchain_ != VK_NULL_HANDLE) {
++            submission_frame_data.discard_pile.swapchains.push_back(swapchain_);
++            swapchain_ = VK_NULL_HANDLE;
++          }
++          android_surface_lost_ = true;
++          break;
++        }
++#else
          recreateSwapchain(use_hdr_swapchain);
++#endif
        }
-@@ -1101,6 +1198,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
+     }
+   }
+@@ -1101,6 +1211,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
    }
    acquired_swapchain_image_index_.reset();
  
@@ -381,7 +396,7 @@ index 7ccfafa..5bab57d 100644
    if (ELEM(present_result, VK_ERROR_OUT_OF_DATE_KHR, VK_SUBOPTIMAL_KHR)) {
      recreateSwapchain(use_hdr_swapchain);
      return GHOST_kSuccess;
-@@ -1361,6 +1471,11 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1361,6 +1484,17 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    GHOST_InstanceVK &instance_vk = vulkan_instance.value();
    GHOST_DeviceVK &device_vk = instance_vk.device.value();
  
@@ -389,11 +404,17 @@ index 7ccfafa..5bab57d 100644
 +    /* No surface (Android activity in the background). */
 +    return GHOST_kFailure;
 +  }
++#ifdef __ANDROID__
++  if (android_surface_lost_) {
++    /* Wait for a new surface (see #androidUpdateSurface). */
++    return GHOST_kFailure;
++  }
++#endif
 +
    surface_format_ = {};
    if (!selectSurfaceFormat(
            device_vk.vk_physical_device, surface_, use_hdr_swapchain, surface_format_))
-@@ -1388,6 +1503,12 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1388,6 +1522,12 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    VkSurfaceCapabilitiesKHR capabilities = {};
  
    if (device_vk.use_vk_ext_swapchain_maintenance_1) {
@@ -406,7 +427,7 @@ index 7ccfafa..5bab57d 100644
      VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilities2KHR(device_vk.vk_physical_device,
                                                          &vk_physical_device_surface_info,
                                                          &vk_surface_capabilities),
-@@ -1417,6 +1538,13 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1417,6 +1557,13 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
      }
  #endif
  
@@ -420,7 +441,7 @@ index 7ccfafa..5bab57d 100644
      if (width == 0 || height == 0) {
        width = 1280;
        height = 720;
-@@ -1433,6 +1561,26 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1433,6 +1580,26 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
      }
    }
  
@@ -447,7 +468,7 @@ index 7ccfafa..5bab57d 100644
    if (device_vk.use_vk_ext_swapchain_maintenance_1) {
      if (vk_surface_present_scaling_capabilities.minScaledImageExtent.width > render_extent_.width)
      {
-@@ -1514,8 +1662,20 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1514,8 +1681,20 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    create_info.imageArrayLayers = 1;
    create_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                             (use_hdr_swapchain ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
@@ -468,7 +489,7 @@ index 7ccfafa..5bab57d 100644
    create_info.presentMode = present_mode;
    create_info.clipped = VK_TRUE;
    create_info.oldSwapchain = old_swapchain;
-@@ -1630,6 +1790,11 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+@@ -1630,6 +1809,11 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
      case GHOST_kVulkanPlatformWayland:
        return VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
        break;
@@ -480,7 +501,7 @@ index 7ccfafa..5bab57d 100644
  #  endif
      case GHOST_kVulkanPlatformHeadless:
        break;
-@@ -1638,6 +1803,74 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+@@ -1638,6 +1822,75 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
    return nullptr;
  }
  
@@ -505,9 +526,10 @@ index 7ccfafa..5bab57d 100644
 +
 +void GHOST_ContextVK::androidUpdateSurface()
 +{
++  /* A lost surface can't be used again: a new surface is created when the activity is resumed
++   * (new window generation), until then there is nothing to present to. */
 +  if (android_window_info_->native_window == android_surface_window_ &&
-+      android_window_info_->generation == android_surface_generation_ && !android_surface_lost_ &&
-+      (surface_ != VK_NULL_HANDLE || android_surface_window_ == nullptr))
++      android_window_info_->generation == android_surface_generation_)
 +  {
 +    return;
 +  }
@@ -555,7 +577,7 @@ index 7ccfafa..5bab57d 100644
  GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
  {
    bool use_vk_ext_swapchain_colorspace = false;
-@@ -1657,6 +1890,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1657,6 +1910,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
      case GHOST_kVulkanPlatformWayland:
        use_window_surface = (wayland_display_ != nullptr) && (wayland_surface_ != nullptr);
        break;
@@ -567,7 +589,7 @@ index 7ccfafa..5bab57d 100644
  #  endif
      case GHOST_kVulkanPlatformHeadless:
        use_window_surface = false;
-@@ -1757,6 +1995,14 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1757,6 +2015,14 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
          break;
        }
  #  endif
@@ -582,7 +604,7 @@ index 7ccfafa..5bab57d 100644
  #  ifdef WITH_GHOST_WAYLAND
        case GHOST_kVulkanPlatformWayland: {
          VkWaylandSurfaceCreateInfoKHR surface_create_info = {};
-@@ -1788,7 +2034,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1788,7 +2054,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
      optional_device_extensions.append(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
  #endif
  
@@ -596,7 +618,7 @@ index 7ccfafa..5bab57d 100644
  #endif
      required_device_extensions.append(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
 diff --git a/intern/ghost/intern/GHOST_ContextVK.hh b/intern/ghost/intern/GHOST_ContextVK.hh
-index 3a89cab..c4cb066 100644
+index 3a89cab..c1743e7 100644
 --- a/intern/ghost/intern/GHOST_ContextVK.hh
 +++ b/intern/ghost/intern/GHOST_ContextVK.hh
 @@ -37,6 +37,10 @@
@@ -672,7 +694,7 @@ index 3a89cab..c4cb066 100644
 +  /** The native window `surface_` was created for. */
 +  ANativeWindow *android_surface_window_ = nullptr;
 +  uint64_t android_surface_generation_ = 0;
-+  /** Presenting reported the surface to be lost, recreate it. */
++  /** The surface was lost (abandoned by the system), a new one is needed to present. */
 +  bool android_surface_lost_ = false;
 +#endif
  
@@ -1010,48 +1032,81 @@ index da7857d..8b9caa8 100644
    DEPENDS makesrna
  )
 diff --git a/source/blender/windowmanager/intern/wm_window.cc b/source/blender/windowmanager/intern/wm_window.cc
-index 4c0aa2c..e44ba9e 100644
+index 4c0aa2c..9077d57 100644
 --- a/source/blender/windowmanager/intern/wm_window.cc
 +++ b/source/blender/windowmanager/intern/wm_window.cc
-@@ -47,6 +47,10 @@
+@@ -47,6 +47,12 @@
  
  #include "BLT_translation.hh"
  
 +#ifdef __ANDROID__
++#  include "BKE_blendfile.hh"
 +#  include "GHOST_Android.hh"
++#  include <unistd.h>
 +#endif
 +
  #include "BKE_blender_version.h"
  #include "BKE_context.hh"
  #include "BKE_global.hh"
-@@ -2266,6 +2270,26 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
+@@ -2266,6 +2272,57 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
  
  #endif /* WITH_GHOST_CSD */
  
 +#ifdef __ANDROID__
++/** An operator is running (e.g. a paint stroke or a transform). */
++static bool wm_android_modal_operator_running(wmWindowManager *wm)
++{
++  for (wmWindow &win : wm->windows) {
++    for (wmEventHandler &handler_base : win.runtime->modalhandlers) {
++      if (handler_base.type == WM_HANDLER_TYPE_OP) {
++        if (reinterpret_cast<wmEventHandler_Op *>(&handler_base)->op) {
++          return true;
++        }
++      }
++    }
++  }
++  return false;
++}
++
 +/**
 + * Android can terminate applications in the background without notice,
 + * write a recovery file (auto-save) when the application is paused.
 + */
 +static void wm_ghost_android_lifecycle(GHOST_TAndroidLifecycleEvent event)
 +{
-+  if (!ELEM(event, GHOST_kAndroidLifecycleEnterBackground, GHOST_kAndroidLifecycleTerminating)) {
-+    return;
-+  }
 +  Main *bmain = G_MAIN;
 +  wmWindowManager *wm = bmain ? static_cast<wmWindowManager *>(bmain->wm.first) : nullptr;
-+  if (wm == nullptr || wm->file_saved) {
-+    return;
++
++  if (event == GHOST_kAndroidLifecycleEnterBackground) {
++    if (wm == nullptr || wm->file_saved) {
++      return;
++    }
++    /* Like the auto-save timer: the data can't be saved while an operator runs
++     * (the regular auto-save file is kept). */
++    if (wm_android_modal_operator_running(wm)) {
++      CLOG_WARN(&LOG_GHOST_SYSTEM, "Application paused while an operator runs, no auto-save");
++      return;
++    }
++    CLOG_INFO(&LOG_GHOST_SYSTEM, "Application paused, writing auto-save file");
++    WM_autosave_write(wm, bmain, &wm->runtime->reports);
 +  }
-+  CLOG_INFO(&LOG_GHOST_SYSTEM, "Application paused, writing auto-save file");
-+  WM_autosave_write(wm, bmain, &wm->runtime->reports);
++  else if (event == GHOST_kAndroidLifecycleTerminating) {
++    /* The activity is destroyed and SDL shut down from the Java side, Blender can't continue
++     * (the regular exit asks to save changes). The auto-save file was written when the
++     * application was paused, which always happens first. */
++    CLOG_INFO(&LOG_GHOST_SYSTEM, "Application terminated");
++    if ((U.pref_flag & USER_PREF_FLAG_SAVE) && U.runtime.is_dirty) {
++      BKE_blendfile_userdef_write_all(nullptr);
++    }
++    _exit(EXIT_SUCCESS);
++  }
 +}
 +#endif
 +
  void wm_ghost_init(bContext *C)
  {
    if (g_system) {
-@@ -2283,6 +2307,9 @@ void wm_ghost_init(bContext *C)
+@@ -2283,6 +2340,9 @@ void wm_ghost_init(bContext *C)
    GHOST_ISystem::createSystem();
    g_system = GHOST_ISystem::getSystem();
    GPU_backend_ghost_system_set(g_system);

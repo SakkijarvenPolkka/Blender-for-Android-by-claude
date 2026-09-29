@@ -12,7 +12,44 @@
 #include "GHOST_ContextNone.hh"
 #include "GHOST_utildefines.hh"
 
+#include <android/native_window_jni.h>
+#include <jni.h>
+
 #include <cstdlib>
+
+/**
+ * A new reference to the native window of the activity's surface (`SDLActivity.getNativeSurface`),
+ * null when there is no valid surface.
+ *
+ * SDL's #SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER isn't used: SDL releases the window when the
+ * surface is destroyed (on the UI thread) without clearing the property.
+ */
+static ANativeWindow *activity_native_window_acquire()
+{
+  JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  if (env == nullptr) {
+    return nullptr;
+  }
+  ANativeWindow *native_window = nullptr;
+  jclass activity_class = env->FindClass("org/libsdl/app/SDLActivity");
+  if (activity_class) {
+    jmethodID method = env->GetStaticMethodID(
+        activity_class, "getNativeSurface", "()Landroid/view/Surface;");
+    if (method) {
+      jobject surface = env->CallStaticObjectMethod(activity_class, method);
+      if (surface) {
+        /* Null when the surface has been released. */
+        native_window = ANativeWindow_fromSurface(env, surface);
+        env->DeleteLocalRef(surface);
+      }
+    }
+    env->DeleteLocalRef(activity_class);
+  }
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+  }
+  return native_window;
+}
 
 GHOST_WindowAndroid::GHOST_WindowAndroid(GHOST_SystemAndroid *system,
                                          const char *title,
@@ -38,7 +75,9 @@ GHOST_WindowAndroid::GHOST_WindowAndroid(GHOST_SystemAndroid *system,
   if (sdl_win_ == nullptr) {
     return;
   }
-  updateNativeWindow();
+  updateSize();
+  /* The application only starts once the activity has a surface. */
+  setSurfaceAvailable(true);
 
   if (setDrawingContextType(type) == GHOST_kSuccess) {
     valid_setup_ = true;
@@ -54,12 +93,15 @@ GHOST_WindowAndroid::~GHOST_WindowAndroid()
     SDL_DestroyCursor(custom_cursor_);
   }
   releaseNativeHandles();
+  if (native_window_) {
+    ANativeWindow_release(native_window_);
+  }
   if (sdl_win_) {
     SDL_DestroyWindow(sdl_win_);
   }
 }
 
-bool GHOST_WindowAndroid::updateNativeWindow()
+bool GHOST_WindowAndroid::updateSize()
 {
   int width = 0, height = 0;
   SDL_GetWindowSizeInPixels(sdl_win_, &width, &height);
@@ -67,12 +109,27 @@ bool GHOST_WindowAndroid::updateNativeWindow()
   size_[0] = width;
   size_[1] = height;
 #ifdef WITH_VULKAN_BACKEND
-  vulkan_window_info_.native_window = static_cast<ANativeWindow *>(SDL_GetPointerProperty(
-      SDL_GetWindowProperties(sdl_win_), SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
   vulkan_window_info_.size[0] = width;
   vulkan_window_info_.size[1] = height;
 #endif
   return size_changed;
+}
+
+void GHOST_WindowAndroid::setSurfaceAvailable(const bool available)
+{
+  /* The Vulkan surface keeps its own reference, releasing this one is always safe. */
+  if (native_window_) {
+    ANativeWindow_release(native_window_);
+    native_window_ = nullptr;
+  }
+  if (available) {
+    native_window_ = activity_native_window_acquire();
+  }
+#ifdef WITH_VULKAN_BACKEND
+  vulkan_window_info_.native_window = native_window_;
+  /* Recreate the Vulkan surface even when the same window is returned. */
+  vulkan_window_info_.generation++;
+#endif
 }
 
 GHOST_Context *GHOST_WindowAndroid::newDrawingContext(GHOST_TDrawingContextType type)
@@ -222,10 +279,17 @@ void GHOST_WindowAndroid::startTextInput()
   SDL_DestroyProperties(props);
 }
 
+void GHOST_WindowAndroid::syncTextInputMode()
+{
+  /* SDL stops text input itself when the virtual keyboard loses focus. */
+  text_input_mode_ = getTextInputMode();
+}
+
 #ifdef WITH_INPUT_IME
 void GHOST_WindowAndroid::beginIME(
     int32_t x, int32_t y, int32_t w, int32_t h, bool /*completed*/)
 {
+  syncTextInputMode();
   SDL_Rect rect = {x, y, w > 0 ? w : 1, h > 0 ? h : 1};
   SDL_SetTextInputArea(sdl_win_, &rect, 0);
   if (text_input_mode_ == TextInputMode::None) {
@@ -236,6 +300,7 @@ void GHOST_WindowAndroid::beginIME(
 
 void GHOST_WindowAndroid::endIME()
 {
+  syncTextInputMode();
   if (text_input_mode_ == TextInputMode::IME) {
     SDL_StopTextInput(sdl_win_);
     text_input_mode_ = TextInputMode::None;
@@ -245,6 +310,7 @@ void GHOST_WindowAndroid::endIME()
 
 void GHOST_WindowAndroid::toggleVirtualKeyboard()
 {
+  syncTextInputMode();
   if (text_input_mode_ == TextInputMode::None) {
     SDL_Rect rect = {0, 0, 1, 1};
     SDL_SetTextInputArea(sdl_win_, &rect, 0);

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Blender draws with Vulkan (Galaxy S22: Adreno 730 / Xclipse 920). -->
+    <!-- Blender draws with Vulkan 1.2 (Galaxy S22: Adreno 730 / Xclipse 920). -->
     <uses-feature
         android:name="android.hardware.vulkan.version"
-        android:version="0x401000"
+        android:version="0x402000"
         android:required="true" />
     <uses-feature
         android:name="android.hardware.touchscreen"
@@ -51,6 +51,7 @@
 
         <activity
             android:name=".LauncherActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation|locale|layoutDirection|fontScale"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.Blender.Launcher">
