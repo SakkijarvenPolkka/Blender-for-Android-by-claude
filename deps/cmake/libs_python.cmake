@@ -159,6 +159,12 @@ ExternalProject_Add(external_python
     --without-readline
   BUILD_COMMAND ${PYTHON_ANDROID_ENV} make -j${DEPS_JOBS}
   INSTALL_COMMAND ${PYTHON_ANDROID_ENV} make install
+    # Internal libraries of the statically linked `_decimal` & `_sha2` modules, they are
+    # not part of `libpython3.x.a`.
+    COMMAND ${CMAKE_COMMAND} -E copy
+      <BINARY_DIR>/Modules/_decimal/libmpdec/libmpdec.a
+      <BINARY_DIR>/Modules/_hacl/libHacl_Hash_SHA2.a
+      ${LIBDIR}/lib/
   LOG_CONFIGURE ON
   LOG_BUILD ON
   LOG_INSTALL ON

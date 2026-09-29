@@ -101,7 +101,7 @@ if(WITH_PYTHON)
 
   # The standard library extension modules are linked into `libpython3.x.a`
   # (`MODULE_BUILDTYPE=static`), add the libraries they depend on.
-  foreach(_lib ssl crypto ffi sqlite3 lzma bz2 expat)
+  foreach(_lib mpdec Hacl_Hash_SHA2 ssl crypto ffi sqlite3 lzma bz2 expat)
     find_library_static(PYTHON_DEP_${_lib}_LIBRARY NAMES ${_lib} HINTS ${LIBDIR}/lib REQUIRED)
     mark_as_advanced(PYTHON_DEP_${_lib}_LIBRARY)
     list(APPEND PYTHON_LIBRARIES ${PYTHON_DEP_${_lib}_LIBRARY})

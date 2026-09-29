@@ -78,7 +78,7 @@ index fb0085a..93e7b4c 100644
      DEPENDS msgfmt ${_file_from})
  
 diff --git a/build_files/cmake/platform/dependency_targets.cmake b/build_files/cmake/platform/dependency_targets.cmake
-index f711326..e561958 100644
+index f711326..496e179 100644
 --- a/build_files/cmake/platform/dependency_targets.cmake
 +++ b/build_files/cmake/platform/dependency_targets.cmake
 @@ -141,7 +141,10 @@ target_link_libraries(bf_deps_png INTERFACE ${PNG_LIBRARIES})
@@ -93,6 +93,50 @@ index f711326..e561958 100644
  
  # -----------------------------------------------------------------------------
  # Configure USD
+@@ -427,7 +430,11 @@ if(WITH_AUDASPACE)
+   if(WITH_SYSTEM_AUDASPACE)
+     target_link_libraries(bf_deps_optional_audaspace INTERFACE ${AUDASPACE_LIBRARIES} ${AUDASPACE_PY_LIBRARIES})
+   else()
+-    target_link_libraries(bf_deps_optional_audaspace INTERFACE audaspace audaspace-py)
++    target_link_libraries(bf_deps_optional_audaspace INTERFACE audaspace)
++    # The Python binding is only built with NumPy (see `extern/audaspace/blender_config.cmake`).
++    if(WITH_PYTHON AND WITH_PYTHON_NUMPY)
++      target_link_libraries(bf_deps_optional_audaspace INTERFACE audaspace-py)
++    endif()
+   endif()
+ endif()
+ 
+diff --git a/extern/audaspace/CMakeLists.txt b/extern/audaspace/CMakeLists.txt
+index 2804842..7029a46 100644
+--- a/extern/audaspace/CMakeLists.txt
++++ b/extern/audaspace/CMakeLists.txt
+@@ -265,6 +265,9 @@ if(WIN32)
+ 		file(GLOB LIBRARY_DIRS ${LIBRARY_PATH}/*)
+ 		list(APPEND CMAKE_PREFIX_PATH ${LIBRARY_DIRS})
+ 	endif()
++elseif(ANDROID)
++	# Threads are part of Bionic's libc, there is no separate pthread library.
++	set(LIBRARIES ${CMAKE_DL_LIBS})
+ else()
+ 	set(LIBRARIES ${CMAKE_DL_LIBS} -lpthread)
+ endif()
+diff --git a/extern/vulkan_memory_allocator/vk_mem_alloc_impl.cc b/extern/vulkan_memory_allocator/vk_mem_alloc_impl.cc
+index 5401870..a3a8240 100644
+--- a/extern/vulkan_memory_allocator/vk_mem_alloc_impl.cc
++++ b/extern/vulkan_memory_allocator/vk_mem_alloc_impl.cc
+@@ -8,6 +8,12 @@
+ 
+ #define VMA_IMPLEMENTATION
+ 
++#ifdef __ANDROID__
++/* The allocator is created for Vulkan 1.2 (see `vk_common.hh`). Android's `libvulkan.so`
++ * doesn't export the Vulkan 1.3 functions that would be linked to otherwise. */
++#  define VMA_VULKAN_VERSION 1002000 /* Vulkan 1.2 */
++#endif
++
+ #define VMA_LEAK_LOG_FORMAT(format, ...) \
+   do { \
+     fprintf(stderr, "VMA: " format "\n", __VA_ARGS__); \
 diff --git a/intern/ghost/CMakeLists.txt b/intern/ghost/CMakeLists.txt
 index 8c3e57e..37c816b 100644
 --- a/intern/ghost/CMakeLists.txt
@@ -127,7 +171,7 @@ index 8c3e57e..37c816b 100644
    list(APPEND SRC
      intern/GHOST_ContextSDL.cc
 diff --git a/intern/ghost/intern/GHOST_ContextVK.cc b/intern/ghost/intern/GHOST_ContextVK.cc
-index 7ccfafa..cdd60b7 100644
+index 7ccfafa..5bab57d 100644
 --- a/intern/ghost/intern/GHOST_ContextVK.cc
 +++ b/intern/ghost/intern/GHOST_ContextVK.cc
 @@ -21,6 +21,10 @@
@@ -141,7 +185,18 @@ index 7ccfafa..cdd60b7 100644
  #endif
  
  #include "vulkan/vk_ghost_api.hh"
-@@ -410,10 +414,19 @@ struct GHOST_InstanceVK {
+@@ -29,6 +33,10 @@
+ /* Silence compilation warning on non-windows x64 systems. */
+ #  define VMA_EXTERNAL_MEMORY_WIN32 0
+ #endif
++#ifdef __ANDROID__
++/* Same version as `vk_common.hh` & `vk_mem_alloc_impl.cc`. */
++#  define VMA_VULKAN_VERSION 1002000 /* Vulkan 1.2 */
++#endif
+ #include "vk_mem_alloc.h"
+ 
+ #include "CLG_log.h"
+@@ -410,10 +418,19 @@ struct GHOST_InstanceVK {
          continue;
        }
  
@@ -163,7 +218,7 @@ index 7ccfafa..cdd60b7 100644
            !device_vk.features.features.vertexPipelineStoresAndAtomics ||
            !device_vk.features.features.multiViewport ||
            !device_vk.features.features.shaderClipDistance ||
-@@ -425,6 +438,7 @@ struct GHOST_InstanceVK {
+@@ -425,6 +442,7 @@ struct GHOST_InstanceVK {
        {
          continue;
        }
@@ -171,7 +226,7 @@ index 7ccfafa..cdd60b7 100644
  
        const VkPhysicalDeviceProperties &vk_props = device_vk.properties.properties;
        if (preferred_device.is_override) {
-@@ -586,9 +600,23 @@ struct GHOST_InstanceVK {
+@@ -586,9 +604,23 @@ struct GHOST_InstanceVK {
      queue_create_infos.push_back(graphic_queue_create_info);
  
      VkPhysicalDeviceFeatures device_features = {};
@@ -197,7 +252,7 @@ index 7ccfafa..cdd60b7 100644
      device_features.vertexPipelineStoresAndAtomics = VK_TRUE;
      device_features.multiViewport = VK_TRUE;
      device_features.shaderClipDistance = VK_TRUE;
-@@ -598,6 +626,7 @@ struct GHOST_InstanceVK {
+@@ -598,6 +630,7 @@ struct GHOST_InstanceVK {
      device_features.imageCubeArray = VK_TRUE;
      device_features.multiDrawIndirect = VK_TRUE;
      device_features.drawIndirectFirstInstance = VK_TRUE;
@@ -205,7 +260,7 @@ index 7ccfafa..cdd60b7 100644
      device_features.samplerAnisotropy = device.features.features.samplerAnisotropy;
      device_features.wideLines = device.features.features.wideLines;
  
-@@ -632,7 +661,12 @@ struct GHOST_InstanceVK {
+@@ -632,7 +665,12 @@ struct GHOST_InstanceVK {
      provoking_vertex_features.sType =
          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
      provoking_vertex_features.provokingVertexLast = VK_TRUE;
@@ -219,7 +274,7 @@ index 7ccfafa..cdd60b7 100644
  #endif
  
      /* Enable dynamic rendering. */
-@@ -846,6 +880,29 @@ GHOST_ContextVK::GHOST_ContextVK(const GHOST_ContextParams &context_params,
+@@ -846,6 +884,29 @@ GHOST_ContextVK::GHOST_ContextVK(const GHOST_ContextParams &context_params,
    frame_data_.reserve(5);
  }
  
@@ -249,7 +304,7 @@ index 7ccfafa..cdd60b7 100644
  GHOST_ContextVK::~GHOST_ContextVK()
  {
    if (vulkan_instance.has_value()) {
-@@ -917,6 +974,12 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+@@ -917,6 +978,12 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
    }
    submission_frame_data.discard_pile.destroy(vk_device);
  
@@ -262,7 +317,7 @@ index 7ccfafa..cdd60b7 100644
    const bool use_hdr_swapchain = hdr_info_ &&
                                   (hdr_info_->wide_gamut_enabled || hdr_info_->hdr_enabled) &&
                                   device_vk.use_vk_ext_swapchain_colorspace;
-@@ -941,6 +1004,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+@@ -941,6 +1008,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
          recreateSwapchain(use_hdr_swapchain);
        }
      }
@@ -282,7 +337,7 @@ index 7ccfafa..cdd60b7 100644
  #endif
    }
    /* there is no valid swapchain when the previous window was minimized. User can have maximized
-@@ -964,6 +1040,23 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+@@ -964,6 +1044,23 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
                                               submission_frame_data.acquire_semaphore,
                                               VK_NULL_HANDLE,
                                               &image_index);
@@ -306,7 +361,7 @@ index 7ccfafa..cdd60b7 100644
        if (ELEM(acquire_result, VK_ERROR_OUT_OF_DATE_KHR, VK_SUBOPTIMAL_KHR)) {
          recreateSwapchain(use_hdr_swapchain);
        }
-@@ -1101,6 +1194,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
+@@ -1101,6 +1198,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
    }
    acquired_swapchain_image_index_.reset();
  
@@ -326,7 +381,7 @@ index 7ccfafa..cdd60b7 100644
    if (ELEM(present_result, VK_ERROR_OUT_OF_DATE_KHR, VK_SUBOPTIMAL_KHR)) {
      recreateSwapchain(use_hdr_swapchain);
      return GHOST_kSuccess;
-@@ -1361,6 +1467,11 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1361,6 +1471,11 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    GHOST_InstanceVK &instance_vk = vulkan_instance.value();
    GHOST_DeviceVK &device_vk = instance_vk.device.value();
  
@@ -338,7 +393,20 @@ index 7ccfafa..cdd60b7 100644
    surface_format_ = {};
    if (!selectSurfaceFormat(
            device_vk.vk_physical_device, surface_, use_hdr_swapchain, surface_format_))
-@@ -1417,6 +1528,13 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1388,6 +1503,12 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+   VkSurfaceCapabilitiesKHR capabilities = {};
+ 
+   if (device_vk.use_vk_ext_swapchain_maintenance_1) {
++#ifdef __ANDROID__
++    /* Android's Vulkan loader only exports core functions. */
++    const auto vkGetPhysicalDeviceSurfaceCapabilities2KHR =
++        reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR>(vkGetInstanceProcAddr(
++            instance_vk.vk_instance, "vkGetPhysicalDeviceSurfaceCapabilities2KHR"));
++#endif
+     VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilities2KHR(device_vk.vk_physical_device,
+                                                         &vk_physical_device_surface_info,
+                                                         &vk_surface_capabilities),
+@@ -1417,6 +1538,13 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
      }
  #endif
  
@@ -352,7 +420,7 @@ index 7ccfafa..cdd60b7 100644
      if (width == 0 || height == 0) {
        width = 1280;
        height = 720;
-@@ -1433,6 +1551,26 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1433,6 +1561,26 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
      }
    }
  
@@ -379,7 +447,7 @@ index 7ccfafa..cdd60b7 100644
    if (device_vk.use_vk_ext_swapchain_maintenance_1) {
      if (vk_surface_present_scaling_capabilities.minScaledImageExtent.width > render_extent_.width)
      {
-@@ -1514,8 +1652,20 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1514,8 +1662,20 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    create_info.imageArrayLayers = 1;
    create_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                             (use_hdr_swapchain ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
@@ -400,7 +468,7 @@ index 7ccfafa..cdd60b7 100644
    create_info.presentMode = present_mode;
    create_info.clipped = VK_TRUE;
    create_info.oldSwapchain = old_swapchain;
-@@ -1630,6 +1780,11 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+@@ -1630,6 +1790,11 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
      case GHOST_kVulkanPlatformWayland:
        return VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
        break;
@@ -412,7 +480,7 @@ index 7ccfafa..cdd60b7 100644
  #  endif
      case GHOST_kVulkanPlatformHeadless:
        break;
-@@ -1638,6 +1793,74 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+@@ -1638,6 +1803,74 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
    return nullptr;
  }
  
@@ -487,7 +555,7 @@ index 7ccfafa..cdd60b7 100644
  GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
  {
    bool use_vk_ext_swapchain_colorspace = false;
-@@ -1657,6 +1880,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1657,6 +1890,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
      case GHOST_kVulkanPlatformWayland:
        use_window_surface = (wayland_display_ != nullptr) && (wayland_surface_ != nullptr);
        break;
@@ -499,7 +567,7 @@ index 7ccfafa..cdd60b7 100644
  #  endif
      case GHOST_kVulkanPlatformHeadless:
        use_window_surface = false;
-@@ -1757,6 +1985,14 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1757,6 +1995,14 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
          break;
        }
  #  endif
@@ -514,7 +582,7 @@ index 7ccfafa..cdd60b7 100644
  #  ifdef WITH_GHOST_WAYLAND
        case GHOST_kVulkanPlatformWayland: {
          VkWaylandSurfaceCreateInfoKHR surface_create_info = {};
-@@ -1788,7 +2024,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1788,7 +2034,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
      optional_device_extensions.append(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
  #endif
  

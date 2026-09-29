@@ -81,6 +81,9 @@ add_cmake_dep(tiff TIFF
     -Dtiff-docs=OFF
     -Dtiff-contrib=OFF
     -Dsphinx=OFF
+  POST_INSTALL COMMAND ${CMAKE_COMMAND}
+    -DTARGETS_FILE=${LIBDIR}/lib/cmake/tiff/TiffTargets.cmake
+    -P ${CMAKE_CURRENT_LIST_DIR}/fix_tiff_targets.cmake
 )
 
 add_cmake_dep(webp WEBP
