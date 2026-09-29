@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Blender (Android port)</string>
+    <string name="launcher_version">Version %1$s · unofficial port, not affiliated with the Blender Foundation</string>
+    <string name="launcher_installing">Preparing Blender (first start after installing or updating)…</string>
+    <string name="launcher_starting">Starting Blender…</string>
+    <string name="error_no_vulkan">This device doesn\'t support Vulkan 1.1, which Blender needs to draw its interface.</string>
+    <string name="error_install">Unable to install Blender\'s data files: %1$s</string>
+    <string name="storage_title">Access to your files</string>
+    <string name="storage_message">To open and save .blend files anywhere on the device (Documents, Download, SD card…), Blender needs \"All files access\".\n\nWithout it, Blender can only use its own folder (Android/data/…).</string>
+    <string name="storage_allow">Allow</string>
+    <string name="storage_skip">Not now</string>
+    <string name="toolbar_keyboard">Keyboard</string>
+    <string name="toolbar_undo">Undo</string>
+    <string name="toolbar_redo">Redo</string>
+    <string name="toolbar_view">View</string>
+    <string name="view_front">Front</string>
+    <string name="view_back">Back</string>
+    <string name="view_right">Right</string>
+    <string name="view_left">Left</string>
+    <string name="view_top">Top</string>
+    <string name="view_bottom">Bottom</string>
+    <string name="view_camera">Camera</string>
+    <string name="view_ortho">Perspective / Orthographic</string>
+    <string name="view_selected">Frame Selected</string>
+    <string name="view_all">Frame All</string>
+</resources>

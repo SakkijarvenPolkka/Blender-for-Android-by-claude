@@ -1,0 +1,15 @@
+/* Hide all symbols except the ones the Java side needs.
+ *
+ * SDL's JNI functions are registered in `JNI_OnLoad` (`RegisterNatives`), the SDL activity
+ * calls `SDL_main` after loading the library. Python symbols stay visible for extension
+ * modules. */
+{
+global:
+  JNI_OnLoad;
+  Java_*;
+  SDL_main;
+  Py*;
+  _Py*;
+local:
+  *;
+};

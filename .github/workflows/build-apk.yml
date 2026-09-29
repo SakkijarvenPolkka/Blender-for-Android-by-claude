@@ -1,0 +1,93 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Blender for Android (arm64-v8a)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    env:
+      WORK_DIR: ${{ github.workspace }}/_work
+      CCACHE_DIR: ${{ github.workspace }}/_work/ccache
+      CCACHE_MAXSIZE: 3G
+      CCACHE_COMPRESS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules || true
+          df -h "${GITHUB_WORKSPACE}"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build qemu-user-static ccache autoconf automake libtool pkg-config \
+            patch zip unzip libssl-dev zlib1g-dev libffi-dev
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            _work/android_arm64_libs
+            _work/host_python
+            _work/downloads
+          key: deps-${{ runner.os }}-${{ hashFiles('BLENDER_VERSION', 'deps/**', 'scripts/env.sh', 'scripts/build_deps.sh') }}
+
+      - name: Cache compiler output
+        uses: actions/cache@v4
+        with:
+          path: _work/ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: Android SDK & NDK
+        run: |
+          export ANDROID_HOME="${ANDROID_SDK_ROOT}"
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "${GITHUB_ENV}"
+          ./scripts/setup_sdk.sh
+
+      - name: Blender source
+        run: ./scripts/fetch_blender.sh
+
+      - name: Dependencies
+        run: ./scripts/build_deps.sh
+
+      - name: Blender
+        run: |
+          ./scripts/build_blender.sh
+          ccache --show-stats || true
+
+      - name: APK
+        run: ./scripts/package_apk.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blender-android-arm64-apk
+          path: _work/out/*.apk
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: _work/out/*.apk

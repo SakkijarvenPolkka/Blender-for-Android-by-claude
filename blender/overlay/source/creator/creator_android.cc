@@ -1,0 +1,100 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+
+/** \file
+ * \ingroup creator
+ *
+ * Android entry point.
+ *
+ * The Java activity (`org.blender.android.BlenderActivity`, a sub-class of SDL's
+ * `SDLActivity`) prepares the environment (data file locations, see the Android app project),
+ * loads `libblender.so` and calls `SDL_main` on a dedicated thread.
+ */
+
+#ifndef __ANDROID__
+#  error "Android only"
+#endif
+
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+
+#include <android/log.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <pthread.h>
+#include <unistd.h>
+
+/* Blender's `main` (see `creator.cc`). */
+int blender_android_main(int argc, const char **argv);
+
+/* -------------------------------------------------------------------- */
+/** \name Redirect `stdout` & `stderr` to `logcat`
+ * \{ */
+
+static int g_log_pipe[2] = {-1, -1};
+
+static void *log_thread_fn(void * /*user_data*/)
+{
+  char buf[4096];
+  size_t len = 0;
+  while (true) {
+    const ssize_t read_len = read(g_log_pipe[0], buf + len, sizeof(buf) - 1 - len);
+    if (read_len <= 0) {
+      break;
+    }
+    len += size_t(read_len);
+    buf[len] = '\0';
+
+    /* Write complete lines, keep the remainder. */
+    char *line = buf;
+    char *newline;
+    while ((newline = strchr(line, '\n')) != nullptr) {
+      *newline = '\0';
+      __android_log_write(ANDROID_LOG_INFO, "Blender", line);
+      line = newline + 1;
+    }
+    len = strlen(line);
+    if (len == sizeof(buf) - 1) {
+      /* Line too long, flush. */
+      __android_log_write(ANDROID_LOG_INFO, "Blender", line);
+      len = 0;
+    }
+    else if (line != buf) {
+      memmove(buf, line, len + 1);
+    }
+  }
+  return nullptr;
+}
+
+static void log_redirect_init()
+{
+  setvbuf(stdout, nullptr, _IOLBF, 0);
+  setvbuf(stderr, nullptr, _IONBF, 0);
+  if (pipe(g_log_pipe) != 0) {
+    return;
+  }
+  dup2(g_log_pipe[1], STDOUT_FILENO);
+  dup2(g_log_pipe[1], STDERR_FILENO);
+
+  pthread_t thread;
+  if (pthread_create(&thread, nullptr, log_thread_fn, nullptr) == 0) {
+    pthread_detach(thread);
+  }
+}
+
+/** \} */
+
+int main(int argc, char *argv[])
+{
+  /* Keep the standard streams when running outside of the app (testing). */
+  if (getenv("BLENDER_ANDROID_KEEP_STDOUT") == nullptr) {
+    log_redirect_init();
+  }
+
+  /* SDL passes the arguments given by `SDLActivity.getArguments()`
+   * (`argv[0]` is "app_process"). */
+  return blender_android_main(argc, const_cast<const char **>(argv));
+}

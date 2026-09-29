@@ -1,0 +1,1049 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 141fdaf..fe40f5e 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -340,7 +340,7 @@ Enable building Blender against SDL for windowing rather than the native APIs"
+ )
+ mark_as_advanced(WITH_GHOST_SDL)
+ 
+-if(UNIX AND NOT (APPLE OR HAIKU))
++if(UNIX AND NOT (APPLE OR HAIKU OR ANDROID))
+   option(WITH_GHOST_X11 "Enable building Blender against X11 for windowing" ON)
+   mark_as_advanced(WITH_GHOST_X11)
+ 
+@@ -535,7 +535,7 @@ to make Blender more portable across distributions"
+ endif()
+ 
+ # Misc
+-if(WIN32 OR APPLE OR ((UNIX AND (NOT HAIKU)) AND WITH_GHOST_WAYLAND))
++if(WIN32 OR APPLE OR ANDROID OR ((UNIX AND (NOT HAIKU)) AND WITH_GHOST_WAYLAND))
+   option(WITH_INPUT_IME "Enable Input Method Editor (IME) for complex Asian character input" ON)
+ else()
+   set(WITH_INPUT_IME OFF)
+@@ -1538,7 +1538,9 @@ endif()
+ # - WIN32
+ # - APPLE
+ 
+-if(UNIX AND NOT APPLE)
++if(ANDROID)
++  include(platform_android)
++elseif(UNIX AND NOT APPLE)
+   include(platform_unix)
+ elseif(WIN32)
+   include(platform_win32)
+diff --git a/build_files/cmake/macros.cmake b/build_files/cmake/macros.cmake
+index fb0085a..93e7b4c 100644
+--- a/build_files/cmake/macros.cmake
++++ b/build_files/cmake/macros.cmake
+@@ -1115,7 +1115,7 @@ function(data_to_c
+ 
+   add_custom_command(
+     OUTPUT ${file_to}
+-    COMMAND "$<TARGET_FILE:datatoc>" ${file_from} ${file_to} ${symbol_name_override}
++    COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} "$<TARGET_FILE:datatoc>" ${file_from} ${file_to} ${symbol_name_override}
+     DEPENDS ${file_from} datatoc)
+ 
+   set_source_files_properties(${file_to} PROPERTIES GENERATED TRUE)
+@@ -1139,7 +1139,7 @@ function(data_to_c_simple
+ 
+   add_custom_command(
+     OUTPUT  ${_file_to}
+-    COMMAND "$<TARGET_FILE:datatoc>" ${_file_from} ${_file_to}
++    COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} "$<TARGET_FILE:datatoc>" ${_file_from} ${_file_to}
+     DEPENDS ${_file_from} datatoc)
+ 
+   set_source_files_properties(${_file_to} PROPERTIES GENERATED TRUE)
+@@ -1176,12 +1176,12 @@ function(glsl_to_c
+   add_custom_command(
+     OUTPUT  ${_file_tmp} ${_file_meta} ${_file_info} ${_file_dep}
+     DEPFILE ${_file_dep}
+-    COMMAND "$<TARGET_FILE:shader_tool>" ${_file_from} ${_file_tmp} ${_file_meta} ${_file_info} ${_file_dep} ${_inc_list}
++    COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} "$<TARGET_FILE:shader_tool>" ${_file_from} ${_file_tmp} ${_file_meta} ${_file_info} ${_file_dep} ${_inc_list}
+     DEPENDS ${_file_from} shader_tool)
+ 
+   add_custom_command(
+     OUTPUT  ${_file_to}
+-    COMMAND "$<TARGET_FILE:datatoc>" ${_file_tmp} ${_file_to}
++    COMMAND ${CMAKE_CROSSCOMPILING_EMULATOR} "$<TARGET_FILE:datatoc>" ${_file_tmp} ${_file_to}
+     DEPENDS ${_file_tmp} datatoc)
+ 
+   set_source_files_properties(${_file_tmp} PROPERTIES GENERATED TRUE)
+@@ -1214,7 +1214,7 @@ function(msgfmt_simple
+     make_directory ${_file_to_path}
+ 
+     COMMAND ${CMAKE_COMMAND} -E
+-    env ${PLATFORM_ENV_BUILD} "$<TARGET_FILE:msgfmt>" ${_file_from} ${_file_to}
++    env ${PLATFORM_ENV_BUILD} ${CMAKE_CROSSCOMPILING_EMULATOR} "$<TARGET_FILE:msgfmt>" ${_file_from} ${_file_to}
+ 
+     DEPENDS msgfmt ${_file_from})
+ 
+diff --git a/build_files/cmake/platform/dependency_targets.cmake b/build_files/cmake/platform/dependency_targets.cmake
+index f711326..e561958 100644
+--- a/build_files/cmake/platform/dependency_targets.cmake
++++ b/build_files/cmake/platform/dependency_targets.cmake
+@@ -141,7 +141,10 @@ target_link_libraries(bf_deps_png INTERFACE ${PNG_LIBRARIES})
+ # Configure OpenImageIO
+ 
+ add_library(bf::dependencies::openimageio ALIAS OpenImageIO::OpenImageIO)
+-get_target_property(OPENIMAGEIO_TOOL OpenImageIO::oiiotool LOCATION)
++# The tool is not available when cross-compiling (only used by tests).
++if(TARGET OpenImageIO::oiiotool)
++  get_target_property(OPENIMAGEIO_TOOL OpenImageIO::oiiotool LOCATION)
++endif()
+ 
+ # -----------------------------------------------------------------------------
+ # Configure USD
+diff --git a/intern/ghost/CMakeLists.txt b/intern/ghost/CMakeLists.txt
+index 8c3e57e..37c816b 100644
+--- a/intern/ghost/CMakeLists.txt
++++ b/intern/ghost/CMakeLists.txt
+@@ -26,6 +26,7 @@ set(SRC
+   intern/GHOST_Window.cc
+   intern/GHOST_WindowManager.cc
+ 
++  GHOST_Android.hh
+   GHOST_CallbackEventConsumer.hh
+   GHOST_IContext.hh
+   GHOST_IEvent.hh
+@@ -135,6 +136,20 @@ list(APPEND SRC
+ 
+ if(WITH_HEADLESS)
+   add_definitions(-DWITH_HEADLESS)
++elseif(ANDROID)
++  # Android: SDL3 provides the activity, surface and input integration.
++  list(APPEND SRC
++    intern/GHOST_SystemAndroid.cc
++    intern/GHOST_WindowAndroid.cc
++
++    intern/GHOST_SystemAndroid.hh
++    intern/GHOST_WindowAndroid.hh
++  )
++  add_definitions(-DWITH_GHOST_ANDROID)
++
++  list(APPEND LIB
++    bf::dependencies::optional::sdl
++  )
+ elseif(WITH_GHOST_SDL)
+   list(APPEND SRC
+     intern/GHOST_ContextSDL.cc
+diff --git a/intern/ghost/intern/GHOST_ContextVK.cc b/intern/ghost/intern/GHOST_ContextVK.cc
+index 7ccfafa..cdd60b7 100644
+--- a/intern/ghost/intern/GHOST_ContextVK.cc
++++ b/intern/ghost/intern/GHOST_ContextVK.cc
+@@ -21,6 +21,10 @@
+ #  ifdef WITH_GHOST_WAYLAND
+ #    include <vulkan/vulkan_wayland.h>
+ #  endif
++#  ifdef __ANDROID__
++#    include <android/native_window.h>
++#    include <vulkan/vulkan_android.h>
++#  endif
+ #endif
+ 
+ #include "vulkan/vk_ghost_api.hh"
+@@ -410,10 +414,19 @@ struct GHOST_InstanceVK {
+         continue;
+       }
+ 
++#ifdef __ANDROID__
++      /* Mobile GPUs lack some of the desktop features, the missing features are reported and not
++       * enabled. Blender's GPU module checks the capabilities of the device it runs on. */
++      if (!device_vk.features.features.vertexPipelineStoresAndAtomics ||
++          !device_vk.features.features.fragmentStoresAndAtomics)
++      {
++        continue;
++      }
++#else
+       if (
+-#ifndef __APPLE__
++#  ifndef __APPLE__
+           !device_vk.features.features.geometryShader ||
+-#endif
++#  endif
+           !device_vk.features.features.vertexPipelineStoresAndAtomics ||
+           !device_vk.features.features.multiViewport ||
+           !device_vk.features.features.shaderClipDistance ||
+@@ -425,6 +438,7 @@ struct GHOST_InstanceVK {
+       {
+         continue;
+       }
++#endif
+ 
+       const VkPhysicalDeviceProperties &vk_props = device_vk.properties.properties;
+       if (preferred_device.is_override) {
+@@ -586,9 +600,23 @@ struct GHOST_InstanceVK {
+     queue_create_infos.push_back(graphic_queue_create_info);
+ 
+     VkPhysicalDeviceFeatures device_features = {};
+-#ifndef __APPLE__
++#ifdef __ANDROID__
++    /* Only enable what the device supports, see #select_physical_device. */
++    const VkPhysicalDeviceFeatures &supported = device.features.features;
++    device_features.geometryShader = supported.geometryShader;
++    device_features.vertexPipelineStoresAndAtomics = supported.vertexPipelineStoresAndAtomics;
++    device_features.multiViewport = supported.multiViewport;
++    device_features.shaderClipDistance = supported.shaderClipDistance;
++    device_features.fragmentStoresAndAtomics = supported.fragmentStoresAndAtomics;
++    device_features.logicOp = supported.logicOp;
++    device_features.dualSrcBlend = supported.dualSrcBlend;
++    device_features.imageCubeArray = supported.imageCubeArray;
++    device_features.multiDrawIndirect = supported.multiDrawIndirect;
++    device_features.drawIndirectFirstInstance = supported.drawIndirectFirstInstance;
++#else
++#  ifndef __APPLE__
+     device_features.geometryShader = VK_TRUE;
+-#endif
++#  endif
+     device_features.vertexPipelineStoresAndAtomics = VK_TRUE;
+     device_features.multiViewport = VK_TRUE;
+     device_features.shaderClipDistance = VK_TRUE;
+@@ -598,6 +626,7 @@ struct GHOST_InstanceVK {
+     device_features.imageCubeArray = VK_TRUE;
+     device_features.multiDrawIndirect = VK_TRUE;
+     device_features.drawIndirectFirstInstance = VK_TRUE;
++#endif
+     device_features.samplerAnisotropy = device.features.features.samplerAnisotropy;
+     device_features.wideLines = device.features.features.wideLines;
+ 
+@@ -632,7 +661,12 @@ struct GHOST_InstanceVK {
+     provoking_vertex_features.sType =
+         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+     provoking_vertex_features.provokingVertexLast = VK_TRUE;
+-    feature_struct_ptr.push_back(&provoking_vertex_features);
++#  ifdef __ANDROID__
++    if (device.extensions.is_enabled(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME))
++#  endif
++    {
++      feature_struct_ptr.push_back(&provoking_vertex_features);
++    }
+ #endif
+ 
+     /* Enable dynamic rendering. */
+@@ -846,6 +880,29 @@ GHOST_ContextVK::GHOST_ContextVK(const GHOST_ContextParams &context_params,
+   frame_data_.reserve(5);
+ }
+ 
++#ifdef __ANDROID__
++GHOST_ContextVK::GHOST_ContextVK(const GHOST_ContextParams &context_params,
++                                 const GHOST_ContextVK_AndroidWindowInfo *android_window_info,
++                                 int contextMajorVersion,
++                                 int contextMinorVersion,
++                                 const GHOST_GPUDevice &preferred_device)
++    : GHOST_ContextVK(context_params,
++                      android_window_info ? GHOST_kVulkanPlatformAndroid :
++                                            GHOST_kVulkanPlatformHeadless,
++                      nullptr,
++                      nullptr,
++                      nullptr,
++                      nullptr,
++                      nullptr,
++                      contextMajorVersion,
++                      contextMinorVersion,
++                      preferred_device,
++                      nullptr)
++{
++  android_window_info_ = android_window_info;
++}
++#endif
++
+ GHOST_ContextVK::~GHOST_ContextVK()
+ {
+   if (vulkan_instance.has_value()) {
+@@ -917,6 +974,12 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+   }
+   submission_frame_data.discard_pile.destroy(vk_device);
+ 
++#ifdef __ANDROID__
++  if (android_window_info_) {
++    androidUpdateSurface();
++  }
++#endif
++
+   const bool use_hdr_swapchain = hdr_info_ &&
+                                  (hdr_info_->wide_gamut_enabled || hdr_info_->hdr_enabled) &&
+                                  device_vk.use_vk_ext_swapchain_colorspace;
+@@ -941,6 +1004,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+         recreateSwapchain(use_hdr_swapchain);
+       }
+     }
++#endif
++#ifdef __ANDROID__
++    if (android_window_info_ && swapchain_ != VK_NULL_HANDLE) {
++      /* Android: recreate the swap-chain when the window was resized or rotated. */
++      const int window_width = android_window_info_->size[0];
++      const int window_height = android_window_info_->size[1];
++      if (window_width > 0 && window_height > 0 &&
++          (uint32_t(window_width) != render_extent_.width ||
++           uint32_t(window_height) != render_extent_.height))
++      {
++        recreateSwapchain(use_hdr_swapchain);
++      }
++    }
+ #endif
+   }
+   /* there is no valid swapchain when the previous window was minimized. User can have maximized
+@@ -964,6 +1040,23 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+                                              submission_frame_data.acquire_semaphore,
+                                              VK_NULL_HANDLE,
+                                              &image_index);
++#ifdef __ANDROID__
++      /* Android reports sub-optimal when the swap-chain isn't pre-rotated to match the display
++       * orientation, the compositor rotates the image which is fine. Size changes are detected
++       * separately (see above). */
++      if (acquire_result == VK_SUBOPTIMAL_KHR) {
++        acquire_result = VK_SUCCESS;
++      }
++      if (acquire_result == VK_ERROR_SURFACE_LOST_KHR) {
++        /* The surface is gone (activity paused), draw without a swap-chain until a new
++         * surface is available. */
++        GHOST_FrameDiscard &discard_pile = submission_frame_data.discard_pile;
++        discard_pile.swapchains.push_back(swapchain_);
++        swapchain_ = VK_NULL_HANDLE;
++        android_surface_lost_ = true;
++        break;
++      }
++#endif
+       if (ELEM(acquire_result, VK_ERROR_OUT_OF_DATE_KHR, VK_SUBOPTIMAL_KHR)) {
+         recreateSwapchain(use_hdr_swapchain);
+       }
+@@ -1101,6 +1194,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
+   }
+   acquired_swapchain_image_index_.reset();
+ 
++#ifdef __ANDROID__
++  if (present_result == VK_SUBOPTIMAL_KHR) {
++    /* See #swapBufferAcquire. */
++    present_result = VK_SUCCESS;
++  }
++  if (present_result == VK_ERROR_SURFACE_LOST_KHR) {
++    frame_data_[render_frame_].discard_pile.swapchains.push_back(swapchain_);
++    swapchain_ = VK_NULL_HANDLE;
++    android_surface_lost_ = true;
++    return GHOST_kSuccess;
++  }
++#endif
++
+   if (ELEM(present_result, VK_ERROR_OUT_OF_DATE_KHR, VK_SUBOPTIMAL_KHR)) {
+     recreateSwapchain(use_hdr_swapchain);
+     return GHOST_kSuccess;
+@@ -1361,6 +1467,11 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+   GHOST_InstanceVK &instance_vk = vulkan_instance.value();
+   GHOST_DeviceVK &device_vk = instance_vk.device.value();
+ 
++  if (surface_ == VK_NULL_HANDLE) {
++    /* No surface (Android activity in the background). */
++    return GHOST_kFailure;
++  }
++
+   surface_format_ = {};
+   if (!selectSurfaceFormat(
+           device_vk.vk_physical_device, surface_, use_hdr_swapchain, surface_format_))
+@@ -1417,6 +1528,13 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+     }
+ #endif
+ 
++#ifdef __ANDROID__
++    if (android_window_info_) {
++      width = android_window_info_->size[0];
++      height = android_window_info_->size[1];
++    }
++#endif
++
+     if (width == 0 || height == 0) {
+       width = 1280;
+       height = 720;
+@@ -1433,6 +1551,26 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+     }
+   }
+ 
++#ifdef __ANDROID__
++  /* The surface extent is reported in the native orientation of the display. The swap-chain isn't
++   * pre-rotated (the compositor rotates the image), so it uses the current orientation. */
++  if (capabilities.currentTransform &
++      (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR |
++       VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR |
++       VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR))
++  {
++    std::swap(render_extent_.width, render_extent_.height);
++    std::swap(render_extent_min_.width, render_extent_min_.height);
++  }
++  if (android_window_info_ && android_window_info_->size[0] > 0 &&
++      android_window_info_->size[1] > 0)
++  {
++    /* Prefer the size of the window, it is always in the current orientation. */
++    render_extent_.width = uint32_t(android_window_info_->size[0]);
++    render_extent_.height = uint32_t(android_window_info_->size[1]);
++  }
++#endif
++
+   if (device_vk.use_vk_ext_swapchain_maintenance_1) {
+     if (vk_surface_present_scaling_capabilities.minScaledImageExtent.width > render_extent_.width)
+     {
+@@ -1514,8 +1652,20 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+   create_info.imageArrayLayers = 1;
+   create_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                            (use_hdr_swapchain ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
++#ifdef __ANDROID__
++  create_info.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
++  if ((capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) == 0) {
++    create_info.preTransform = capabilities.currentTransform;
++  }
++  /* Most Android drivers only support "inherit". */
++  create_info.compositeAlpha = (capabilities.supportedCompositeAlpha &
++                                VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) ?
++                                   VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR :
++                                   VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
++#else
+   create_info.preTransform = capabilities.currentTransform;
+   create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
++#endif
+   create_info.presentMode = present_mode;
+   create_info.clipped = VK_TRUE;
+   create_info.oldSwapchain = old_swapchain;
+@@ -1630,6 +1780,11 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+     case GHOST_kVulkanPlatformWayland:
+       return VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
+       break;
++#  endif
++#  ifdef __ANDROID__
++    case GHOST_kVulkanPlatformAndroid:
++      return VK_KHR_ANDROID_SURFACE_EXTENSION_NAME;
++      break;
+ #  endif
+     case GHOST_kVulkanPlatformHeadless:
+       break;
+@@ -1638,6 +1793,74 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+   return nullptr;
+ }
+ 
++#ifdef __ANDROID__
++GHOST_TSuccess GHOST_ContextVK::androidCreateSurface()
++{
++  assert(surface_ == VK_NULL_HANDLE);
++  android_surface_window_ = android_window_info_ ? android_window_info_->native_window : nullptr;
++  android_surface_generation_ = android_window_info_ ? android_window_info_->generation : 0;
++  android_surface_lost_ = false;
++  if (android_surface_window_ == nullptr) {
++    return GHOST_kSuccess;
++  }
++  VkAndroidSurfaceCreateInfoKHR surface_create_info = {};
++  surface_create_info.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
++  surface_create_info.window = android_surface_window_;
++  VK_CHECK(vkCreateAndroidSurfaceKHR(
++               vulkan_instance->vk_instance, &surface_create_info, nullptr, &surface_),
++           GHOST_kFailure);
++  return GHOST_kSuccess;
++}
++
++void GHOST_ContextVK::androidUpdateSurface()
++{
++  if (android_window_info_->native_window == android_surface_window_ &&
++      android_window_info_->generation == android_surface_generation_ && !android_surface_lost_ &&
++      (surface_ != VK_NULL_HANDLE || android_surface_window_ == nullptr))
++  {
++    return;
++  }
++  CLOG_INFO(&LOG,
++            "Android: native window changed (%p -> %p), recreating surface",
++            (void *)android_surface_window_,
++            (void *)android_window_info_->native_window);
++
++  GHOST_InstanceVK &instance_vk = vulkan_instance.value();
++  GHOST_DeviceVK &device_vk = instance_vk.device.value();
++  VkDevice vk_device = device_vk.vk_device;
++  device_vk.wait_idle();
++
++  /* Everything that references the old surface must be destroyed before the surface. */
++  for (GHOST_Frame &frame : frame_data_) {
++    for (VkSwapchainKHR swapchain : frame.discard_pile.swapchains) {
++      this->destroySwapchainPresentFences(swapchain);
++    }
++    frame.discard_pile.destroy(vk_device);
++    /* An acquire semaphore may still be signaled by an acquire that wasn't waited on. */
++    if (frame.acquire_semaphore != VK_NULL_HANDLE) {
++      vkDestroySemaphore(vk_device, frame.acquire_semaphore, nullptr);
++      frame.acquire_semaphore = VK_NULL_HANDLE;
++    }
++  }
++  if (swapchain_ != VK_NULL_HANDLE) {
++    this->destroySwapchainPresentFences(swapchain_);
++    vkDestroySwapchainKHR(vk_device, swapchain_, nullptr);
++    swapchain_ = VK_NULL_HANDLE;
++  }
++  for (GHOST_SwapchainImage &swapchain_image : swapchain_images_) {
++    swapchain_image.destroy(vk_device);
++  }
++  swapchain_images_.clear();
++  if (surface_ != VK_NULL_HANDLE) {
++    vkDestroySurfaceKHR(instance_vk.vk_instance, surface_, nullptr);
++    surface_ = VK_NULL_HANDLE;
++  }
++
++  androidCreateSurface();
++  initializeFrameData();
++}
++#endif
++
+ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+ {
+   bool use_vk_ext_swapchain_colorspace = false;
+@@ -1657,6 +1880,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+     case GHOST_kVulkanPlatformWayland:
+       use_window_surface = (wayland_display_ != nullptr) && (wayland_surface_ != nullptr);
+       break;
++#  endif
++#  ifdef __ANDROID__
++    case GHOST_kVulkanPlatformAndroid:
++      use_window_surface = (android_window_info_ != nullptr);
++      break;
+ #  endif
+     case GHOST_kVulkanPlatformHeadless:
+       use_window_surface = false;
+@@ -1757,6 +1985,14 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+         break;
+       }
+ #  endif
++#  ifdef __ANDROID__
++      case GHOST_kVulkanPlatformAndroid: {
++        if (androidCreateSurface() != GHOST_kSuccess) {
++          return GHOST_kFailure;
++        }
++        break;
++      }
++#  endif
+ #  ifdef WITH_GHOST_WAYLAND
+       case GHOST_kVulkanPlatformWayland: {
+         VkWaylandSurfaceCreateInfoKHR surface_create_info = {};
+@@ -1788,7 +2024,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+     optional_device_extensions.append(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+ #endif
+ 
+-#ifndef __APPLE__
++#if defined(__ANDROID__)
++    /* Not supported by all mobile drivers (Qualcomm), flat shaded attributes may use the first
++     * instead of the last vertex in that case. */
++    optional_device_extensions.append(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
++#elif !defined(__APPLE__)
+     required_device_extensions.append(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
+ #endif
+     required_device_extensions.append(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+diff --git a/intern/ghost/intern/GHOST_ContextVK.hh b/intern/ghost/intern/GHOST_ContextVK.hh
+index 3a89cab..c4cb066 100644
+--- a/intern/ghost/intern/GHOST_ContextVK.hh
++++ b/intern/ghost/intern/GHOST_ContextVK.hh
+@@ -37,6 +37,10 @@
+ #include <optional>
+ #include <vector>
+ 
++#ifdef __ANDROID__
++struct ANativeWindow;
++#endif
++
+ namespace blender {
+ class StringRefNull;
+ }
+@@ -58,12 +62,34 @@ enum GHOST_TVulkanPlatformType {
+ #ifdef WITH_GHOST_WAYLAND
+   GHOST_kVulkanPlatformWayland = 2,
+ #endif
++#ifdef __ANDROID__
++  GHOST_kVulkanPlatformAndroid = 3,
++#endif
+ };
+ 
+ struct GHOST_ContextVK_WindowInfo {
+   int size[2];
+ };
+ 
++#ifdef __ANDROID__
++/**
++ * Android surfaces are destroyed when the activity is paused and a new one is created when it
++ * resumes. The window owns this struct and keeps `native_window` up to date, the context compares
++ * it with the window its `VkSurfaceKHR` was created for and recreates the surface when needed.
++ */
++struct GHOST_ContextVK_AndroidWindowInfo {
++  /** Can be null while the application is in the background. */
++  ANativeWindow *native_window = nullptr;
++  /** Size of the window in pixels (current orientation). */
++  int size[2] = {0, 0};
++  /**
++   * Incremented by the window when the surface may have changed (activity paused/resumed), a
++   * new native window can have the same address as the previous one.
++   */
++  uint64_t generation = 0;
++};
++#endif
++
+ struct GHOST_FrameDiscard {
+   std::vector<VkSwapchainKHR> swapchains;
+   std::vector<VkSemaphore> semaphores;
+@@ -126,6 +152,17 @@ class GHOST_ContextVK : public GHOST_Context {
+                   const GHOST_GPUDevice &preferred_device,
+                   const GHOST_WindowHDRInfo *hdr_info_ = nullptr);
+ 
++#ifdef __ANDROID__
++  /**
++   * Constructor for Android windows, pass null `android_window_info` for off-screen contexts.
++   */
++  GHOST_ContextVK(const GHOST_ContextParams &context_params,
++                  const GHOST_ContextVK_AndroidWindowInfo *android_window_info,
++                  int contextMajorVersion,
++                  int contextMinorVersion,
++                  const GHOST_GPUDevice &preferred_device);
++#endif
++
+   /**
+    * Destructor.
+    */
+@@ -252,6 +289,14 @@ class GHOST_ContextVK : public GHOST_Context {
+   wl_display *wayland_display_;
+   const GHOST_ContextVK_WindowInfo *wayland_window_info_;
+ #endif
++#ifdef __ANDROID__
++  const GHOST_ContextVK_AndroidWindowInfo *android_window_info_ = nullptr;
++  /** The native window `surface_` was created for. */
++  ANativeWindow *android_surface_window_ = nullptr;
++  uint64_t android_surface_generation_ = 0;
++  /** Presenting reported the surface to be lost, recreate it. */
++  bool android_surface_lost_ = false;
++#endif
+ 
+   const int context_major_version_;
+   const int context_minor_version_;
+@@ -287,6 +332,11 @@ class GHOST_ContextVK : public GHOST_Context {
+   GHOST_TSuccess recreateSwapchain(bool use_hdr_swapchain);
+   GHOST_TSuccess initializeFrameData();
+   GHOST_TSuccess destroySwapchain();
++#ifdef __ANDROID__
++  /** Recreate the surface when the native window changed (activity paused/resumed). */
++  void androidUpdateSurface();
++  GHOST_TSuccess androidCreateSurface();
++#endif
+ 
+   VkFence getFence();
+   void setPresentFence(VkSwapchainKHR swapchain, VkFence fence);
+diff --git a/intern/ghost/intern/GHOST_ISystem.cc b/intern/ghost/intern/GHOST_ISystem.cc
+index fb5c5ae..35cce12 100644
+--- a/intern/ghost/intern/GHOST_ISystem.cc
++++ b/intern/ghost/intern/GHOST_ISystem.cc
+@@ -15,7 +15,9 @@
+ #include "GHOST_ISystem.hh"
+ #include "GHOST_SystemHeadless.hh"
+ 
+-#if defined(WITH_GHOST_X11) && defined(WITH_GHOST_WAYLAND)
++#if defined(WITH_GHOST_ANDROID)
++#  include "GHOST_SystemAndroid.hh"
++#elif defined(WITH_GHOST_X11) && defined(WITH_GHOST_WAYLAND)
+ #  include "GHOST_SystemWayland.hh"
+ #  include "GHOST_SystemX11.hh"
+ #elif defined(WITH_GHOST_X11)
+@@ -67,6 +69,19 @@ GHOST_TSuccess GHOST_ISystem::createSystem(bool verbose, [[maybe_unused]] bool b
+ 
+ #if defined(WITH_HEADLESS)
+     /* Pass. */
++#elif defined(WITH_GHOST_ANDROID)
++    backends_attempted.push_back({"ANDROID"});
++    try {
++      CLOG_INFO(&LOG, "Create Android system");
++      system_ = new GHOST_SystemAndroid();
++    }
++    catch (const std::runtime_error &e) {
++      if (verbose) {
++        backends_attempted.back().failure_msg = e.what();
++      }
++      delete system_;
++      system_ = nullptr;
++    }
+ #elif defined(WITH_GHOST_X11) && defined(WITH_GHOST_WAYLAND)
+     /* Special case, try Wayland, fall back to X11. */
+     if (has_wayland_libraries) {
+diff --git a/intern/opensubdiv/internal/evaluator/eval_output_gpu.h b/intern/opensubdiv/internal/evaluator/eval_output_gpu.h
+index 0637630..0c04e85 100644
+--- a/intern/opensubdiv/internal/evaluator/eval_output_gpu.h
++++ b/intern/opensubdiv/internal/evaluator/eval_output_gpu.h
+@@ -11,9 +11,6 @@
+ #include "internal/evaluator/gpu_compute_evaluator.h"
+ #include "internal/evaluator/gpu_patch_table.hh"
+ 
+-#include <opensubdiv/osd/glPatchTable.h>
+-#include <opensubdiv/osd/glVertexBuffer.h>
+-
+ #include "gpu_vertex_buffer_wrapper.hh"
+ 
+ namespace blender::opensubdiv {
+diff --git a/source/blender/blenkernel/intern/blendfile.cc b/source/blender/blenkernel/intern/blendfile.cc
+index d2eb290..2ac380b 100644
+--- a/source/blender/blenkernel/intern/blendfile.cc
++++ b/source/blender/blenkernel/intern/blendfile.cc
+@@ -1558,6 +1558,15 @@ UserDef *BKE_blendfile_userdef_from_defaults()
+   userdef->flag &= ~USER_SCRIPT_AUTOEXEC_DISABLE;
+ #endif
+ 
++#ifdef __ANDROID__
++  /* Android has a single window, show temporary editors & render results in the main window. */
++  userdef->render_display_type = USER_RENDER_DISPLAY_SCREEN;
++  userdef->filebrowser_display_type = USER_TEMP_SPACE_DISPLAY_FULLSCREEN;
++  userdef->preferences_display_type = USER_TEMP_SPACE_DISPLAY_FULLSCREEN;
++  /* Applications can be terminated at any time while in the background, save more often. */
++  userdef->savetime = 1;
++#endif
++
+   /* System-specific fonts directory.
+    * NOTE: when not found, leaves as-is (`//` for the blend-file directory). */
+   if (BKE_appdir_font_folder_default(userdef->fontdir, sizeof(userdef->fontdir))) {
+diff --git a/source/blender/blenlib/BLI_subprocess.hh b/source/blender/blenlib/BLI_subprocess.hh
+index 07f193e..75ba8d1 100644
+--- a/source/blender/blenlib/BLI_subprocess.hh
++++ b/source/blender/blenlib/BLI_subprocess.hh
+@@ -15,7 +15,8 @@
+  * Its use should always be inside `#if BLI_SUBPROCESS_SUPPORT` preprocessor directives.
+  */
+ 
+-#if defined(_WIN32) || defined(__linux__)
++/* Android has no POSIX shared memory (`shm_open`) and apps can't spawn processes. */
++#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
+ #  define BLI_SUBPROCESS_SUPPORT 1
+ #else
+ #  define BLI_SUBPROCESS_SUPPORT 0
+diff --git a/source/blender/blenlib/intern/BLI_mmap.cc b/source/blender/blenlib/intern/BLI_mmap.cc
+index d7630e3..b520698 100644
+--- a/source/blender/blenlib/intern/BLI_mmap.cc
++++ b/source/blender/blenlib/intern/BLI_mmap.cc
+@@ -333,7 +333,8 @@ static bool ensure_mmap_initialized()
+ 
+   std::unique_lock lock(mmap_mutex);
+   if (!initialized) {
+-    struct sigaction newact = {{nullptr}}, oldact = {{nullptr}};
++    /* Value-initialize, the order of members is platform dependent (e.g. Android). */
++    struct sigaction newact = {}, oldact = {};
+ 
+     newact.sa_sigaction = sigbus_handler;
+     newact.sa_flags = SA_SIGINFO;
+diff --git a/source/blender/gpu/vulkan/vk_backend.cc b/source/blender/gpu/vulkan/vk_backend.cc
+index bb56a97..e508303 100644
+--- a/source/blender/gpu/vulkan/vk_backend.cc
++++ b/source/blender/gpu/vulkan/vk_backend.cc
+@@ -38,6 +38,12 @@
+ 
+ #include "vk_backend.hh"
+ 
++#ifdef __ANDROID__
++static constexpr bool is_android_build = true;
++#else
++static constexpr bool is_android_build = false;
++#endif
++
+ namespace blender {
+ 
+ static CLG_LogRef LOG = {"gpu.vulkan"};
+@@ -117,7 +123,11 @@ bool GPU_vulkan_is_supported_driver(VkPhysicalDevice vk_physical_device)
+ #endif
+ 
+ #ifdef _WIN32
+-  if (vk_physical_device_driver_properties.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
++  /* The driver versions below are for Windows on ARM, Android drivers use a different
++   * version numbering. */
++  if (vk_physical_device_driver_properties.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY &&
++      !is_android_build)
++  {
+     /* Any Qualcomm driver older than 31.0.112.0 will not be capable of running blender due
+      * to an issue in their semaphore timeline implementation. The driver could return
+      * timelines that have not been provided by Blender. As Blender uses timelines for resource
+@@ -141,6 +151,11 @@ bool GPU_vulkan_is_supported_driver(VkPhysicalDevice vk_physical_device)
+ static Vector<StringRefNull> missing_capabilities_get(VkPhysicalDevice vk_physical_device)
+ {
+   Vector<StringRefNull> missing_capabilities;
++#ifdef __ANDROID__
++  /* Mobile GPUs don't support all desktop features. These are reported, but the device is still
++   * used (features that are not supported are not enabled, see GHOST_ContextVK). */
++  Vector<StringRefNull> optional_capabilities;
++#endif
+   /* Check device features. */
+   VkPhysicalDeviceVulkan12Features features_12 = {
+       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+@@ -151,17 +166,22 @@ static Vector<StringRefNull> missing_capabilities_get(VkPhysicalDevice vk_physic
+ 
+   vkGetPhysicalDeviceFeatures2(vk_physical_device, &features);
+ 
++#ifdef __ANDROID__
++  Vector<StringRefNull> &missing_optional_capabilities = optional_capabilities;
++#else
++  Vector<StringRefNull> &missing_optional_capabilities = missing_capabilities;
++#endif
+ #ifndef __APPLE__
+   /* Features currently not supported by Mesa KosmicKrisp. */
+   if (features.features.geometryShader == VK_FALSE) {
+-    missing_capabilities.append("geometry shaders");
++    missing_optional_capabilities.append("geometry shaders");
+   }
+ #endif
+   if (features.features.vertexPipelineStoresAndAtomics == VK_FALSE) {
+     missing_capabilities.append("vertex pipeline stores and atomics");
+   }
+   if (features.features.multiViewport == VK_FALSE) {
+-    missing_capabilities.append("multi viewport");
++    missing_optional_capabilities.append("multi viewport");
+   }
+   if (features.features.shaderClipDistance == VK_FALSE) {
+     missing_capabilities.append("shader clip distance");
+@@ -170,19 +190,19 @@ static Vector<StringRefNull> missing_capabilities_get(VkPhysicalDevice vk_physic
+     missing_capabilities.append("fragment stores and atomics");
+   }
+   if (features.features.logicOp == VK_FALSE) {
+-    missing_capabilities.append("logical operations");
++    missing_optional_capabilities.append("logical operations");
+   }
+   if (features.features.dualSrcBlend == VK_FALSE) {
+-    missing_capabilities.append("dual source blending");
++    missing_optional_capabilities.append("dual source blending");
+   }
+   if (features.features.imageCubeArray == VK_FALSE) {
+-    missing_capabilities.append("image cube array");
++    missing_optional_capabilities.append("image cube array");
+   }
+   if (features.features.multiDrawIndirect == VK_FALSE) {
+-    missing_capabilities.append("multi draw indirect");
++    missing_optional_capabilities.append("multi draw indirect");
+   }
+   if (features.features.drawIndirectFirstInstance == VK_FALSE) {
+-    missing_capabilities.append("draw indirect first instance");
++    missing_optional_capabilities.append("draw indirect first instance");
+   }
+   if (features_11.shaderDrawParameters == VK_FALSE) {
+     missing_capabilities.append("shader draw parameters");
+@@ -215,7 +235,19 @@ static Vector<StringRefNull> missing_capabilities_get(VkPhysicalDevice vk_physic
+ #ifndef __APPLE__
+   /* Metal doesn't support provoking vertex. */
+   if (!extensions.contains(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME)) {
+-    missing_capabilities.append(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
++    missing_optional_capabilities.append(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
++  }
++#endif
++
++#ifdef __ANDROID__
++  if (!optional_capabilities.is_empty()) {
++    std::stringstream ss;
++    for (StringRefNull &feature : optional_capabilities) {
++      ss << feature << ", ";
++    }
++    CLOG_WARN(&LOG,
++              "Device doesn't support [%s], some drawing may be incorrect",
++              ss.str().c_str());
+   }
+ #endif
+ 
+@@ -560,6 +592,7 @@ void VKBackend::detect_workarounds(VKDevice &device)
+       VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+   extensions.vertex_input_dynamic_state = device.supports_extension(
+       VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
++  extensions.provoking_vertex = device.supports_extension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
+ #if 0
+   extensions.host_image_copy = device.supports_extension(VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+ #endif
+@@ -595,7 +628,9 @@ void VKBackend::detect_workarounds(VKDevice &device)
+    * similar issues. It might be an oversight. Will wait for feedback from the driver developers
+    * and perform some out of bounds error checks.
+    */
+-  if (GPU_type_matches(GPU_DEVICE_QUALCOMM, GPU_OS_WIN, GPU_DRIVER_ANY)) {
++  if (GPU_type_matches(GPU_DEVICE_QUALCOMM, GPU_OS_WIN, GPU_DRIVER_ANY) ||
++      (is_android_build && GPU_type_matches(GPU_DEVICE_QUALCOMM, GPU_OS_ANY, GPU_DRIVER_ANY)))
++  {
+     extensions.vertex_input_dynamic_state = false;
+   }
+ 
+diff --git a/source/blender/gpu/vulkan/vk_device.hh b/source/blender/gpu/vulkan/vk_device.hh
+index cbc9a1a..718b297 100644
+--- a/source/blender/gpu/vulkan/vk_device.hh
++++ b/source/blender/gpu/vulkan/vk_device.hh
+@@ -106,6 +106,12 @@ struct VKExtensions {
+    */
+   bool host_image_copy = false;
+ 
++  /**
++   * Does the device support VK_EXT_provoking_vertex. Always the case on desktop platforms, optional
++   * on Android.
++   */
++  bool provoking_vertex = true;
++
+   /** Log enabled features and extensions. */
+   void log() const;
+ };
+diff --git a/source/blender/gpu/vulkan/vk_graphics_pipeline.hh b/source/blender/gpu/vulkan/vk_graphics_pipeline.hh
+index 473dafa..835918e 100644
+--- a/source/blender/gpu/vulkan/vk_graphics_pipeline.hh
++++ b/source/blender/gpu/vulkan/vk_graphics_pipeline.hh
+@@ -395,7 +395,8 @@ struct VKGraphicsPipelineCreateInfoBuilder {
+     vk_pipeline_rasterization_state_create_info.lineWidth = 1.0f;
+     vk_pipeline_rasterization_state_create_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+     vk_pipeline_rasterization_state_create_info.pNext =
+-        &vk_pipeline_rasterization_provoking_vertex_state_info;
++        extensions.provoking_vertex ? &vk_pipeline_rasterization_provoking_vertex_state_info :
++                                      nullptr;
+ 
+     vk_pipeline_rasterization_state_create_info.cullMode = to_vk_cull_mode_flags(
+         static_cast<GPUFaceCullTest>(shaders_info.state.culling_test));
+diff --git a/source/blender/makesdna/intern/CMakeLists.txt b/source/blender/makesdna/intern/CMakeLists.txt
+index 24a0639..847d741 100644
+--- a/source/blender/makesdna/intern/CMakeLists.txt
++++ b/source/blender/makesdna/intern/CMakeLists.txt
+@@ -106,6 +106,7 @@ add_custom_command(
+     ${CMAKE_CURRENT_BINARY_DIR}/dna_verify.cc
+   COMMAND
+     ${CMAKE_COMMAND} -E env ${PLATFORM_ENV_BUILD}
++    ${CMAKE_CROSSCOMPILING_EMULATOR}
+     "$<TARGET_FILE:makesdna>"
+     ${CMAKE_CURRENT_BINARY_DIR}/dna.cc
+     ${CMAKE_CURRENT_BINARY_DIR}/dna_type_offsets.h
+diff --git a/source/blender/makesrna/intern/CMakeLists.txt b/source/blender/makesrna/intern/CMakeLists.txt
+index da7857d..8b9caa8 100644
+--- a/source/blender/makesrna/intern/CMakeLists.txt
++++ b/source/blender/makesrna/intern/CMakeLists.txt
+@@ -423,6 +423,7 @@ add_custom_command(
+   OUTPUT ${GENSRC}
+   COMMAND
+     ${CMAKE_COMMAND} -E env ${PLATFORM_ENV_BUILD}
++    ${CMAKE_CROSSCOMPILING_EMULATOR}
+     "$<TARGET_FILE:makesrna>" ${CMAKE_SOURCE_DIR}/source/blender/makesdna/ ${CMAKE_CURRENT_BINARY_DIR}/ ${CMAKE_CURRENT_BINARY_DIR}/../
+   DEPENDS makesrna
+ )
+diff --git a/source/blender/windowmanager/intern/wm_window.cc b/source/blender/windowmanager/intern/wm_window.cc
+index 4c0aa2c..e44ba9e 100644
+--- a/source/blender/windowmanager/intern/wm_window.cc
++++ b/source/blender/windowmanager/intern/wm_window.cc
+@@ -47,6 +47,10 @@
+ 
+ #include "BLT_translation.hh"
+ 
++#ifdef __ANDROID__
++#  include "GHOST_Android.hh"
++#endif
++
+ #include "BKE_blender_version.h"
+ #include "BKE_context.hh"
+ #include "BKE_global.hh"
+@@ -2266,6 +2270,26 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
+ 
+ #endif /* WITH_GHOST_CSD */
+ 
++#ifdef __ANDROID__
++/**
++ * Android can terminate applications in the background without notice,
++ * write a recovery file (auto-save) when the application is paused.
++ */
++static void wm_ghost_android_lifecycle(GHOST_TAndroidLifecycleEvent event)
++{
++  if (!ELEM(event, GHOST_kAndroidLifecycleEnterBackground, GHOST_kAndroidLifecycleTerminating)) {
++    return;
++  }
++  Main *bmain = G_MAIN;
++  wmWindowManager *wm = bmain ? static_cast<wmWindowManager *>(bmain->wm.first) : nullptr;
++  if (wm == nullptr || wm->file_saved) {
++    return;
++  }
++  CLOG_INFO(&LOG_GHOST_SYSTEM, "Application paused, writing auto-save file");
++  WM_autosave_write(wm, bmain, &wm->runtime->reports);
++}
++#endif
++
+ void wm_ghost_init(bContext *C)
+ {
+   if (g_system) {
+@@ -2283,6 +2307,9 @@ void wm_ghost_init(bContext *C)
+   GHOST_ISystem::createSystem();
+   g_system = GHOST_ISystem::getSystem();
+   GPU_backend_ghost_system_set(g_system);
++#ifdef __ANDROID__
++  GHOST_AndroidSetLifecycleCallback(wm_ghost_android_lifecycle);
++#endif
+ 
+   if (UNLIKELY(g_system == nullptr)) {
+     /* GHOST will have reported the back-ends that failed to load. */
+diff --git a/source/creator/CMakeLists.txt b/source/creator/CMakeLists.txt
+index 985b969..3c1ee95 100644
+--- a/source/creator/CMakeLists.txt
++++ b/source/creator/CMakeLists.txt
+@@ -149,6 +149,18 @@ set(SRC
+   creator_intern.h
+ )
+ 
++if(ANDROID)
++  # Entry point called by the Java activity (through SDL).
++  list(APPEND SRC
++    creator_android.cc
++  )
++  list(APPEND LIB
++    PRIVATE bf::dependencies::optional::sdl
++    PRIVATE android
++    PRIVATE log
++  )
++endif()
++
+ if(CMAKE_GENERATOR MATCHES "^Visual Studio.+")
+   # This helps visual studio find the debugger visualizers
+   list(APPEND SRC ${CMAKE_SOURCE_DIR}/tools/utils_ide/natvis/Blender.natvis)
+@@ -334,6 +346,9 @@ if(WITH_PYTHON_MODULE)
+     )
+   endif()
+ 
++elseif(ANDROID)
++  # `libblender.so`, loaded by the Java activity.
++  add_library(blender SHARED ${SRC})
+ else()
+   add_executable(blender ${EXETYPE} ${SRC})
+   if(WITH_CPU_CHECK)
+@@ -750,7 +765,38 @@ endfunction()
+ # -----------------------------------------------------------------------------
+ # Install Targets (Platform Specific)
+ 
+-if(UNIX AND NOT APPLE)
++if(ANDROID)
++  # `libblender.so` is packaged in the APK, the data files and Python's standard
++  # library are packaged as assets that are extracted on first start.
++  install(
++    TARGETS blender
++    LIBRARY DESTINATION "lib"
++  )
++
++  if(WITH_PYTHON AND WITH_PYTHON_INSTALL)
++    install(
++      DIRECTORY ${PYTHON_LIBPATH}/python${PYTHON_VERSION}
++      DESTINATION ${TARGETDIR_VER}/python/lib
++      PATTERN "__pycache__" EXCLUDE               # * any cache *
++      PATTERN "config-${PYTHON_VERSION}*" EXCLUDE # static lib & makefiles
++      PATTERN "lib2to3" EXCLUDE                   # ./lib2to3
++      PATTERN "site-packages/*" EXCLUDE           # ./site-packages/*
++      PATTERN "tkinter" EXCLUDE                   # ./tkinter
++      PATTERN "idlelib" EXCLUDE                   # ./idlelib
++      PATTERN "test" EXCLUDE                      # ./test
++      PATTERN "turtledemo" EXCLUDE                # ./turtledemo
++      PATTERN "turtle.py" EXCLUDE                 # ./turtle.py
++      PATTERN "ensurepip" EXCLUDE                 # ./ensurepip (no pip on Android)
++    )
++    get_filename_component(_py_inc_suffix ${PYTHON_INCLUDE_DIR} NAME)
++    install(
++      FILES ${PYTHON_INCLUDE_DIR}/pyconfig.h
++      DESTINATION ${TARGETDIR_VER}/python/include/${_py_inc_suffix}
++    )
++    unset(_py_inc_suffix)
++  endif()
++
++elseif(UNIX AND NOT APPLE)
+ 
+   if(PLATFORM_BUNDLED_LIBRARIES AND TARGETDIR_LIB)
+     install(
+diff --git a/source/creator/creator.cc b/source/creator/creator.cc
+index 4253893..c4db20f 100644
+--- a/source/creator/creator.cc
++++ b/source/creator/creator.cc
+@@ -310,6 +310,11 @@ void main_python_exit()
+ #  define main blender::main_python_enter
+ #endif /* WITH_PYTHON_MODULE */
+ 
++#if defined(__ANDROID__) && !defined(WITH_PYTHON_MODULE)
++/* Called by `SDL_main` (see `creator_android.cc`). */
++#  define main blender_android_main
++#endif
++
+ /** \} */
+ 
+ }  // namespace blender

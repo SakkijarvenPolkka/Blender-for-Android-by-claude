@@ -1,0 +1,10 @@
+# Build output (sources, dependencies, Blender build, APK).
+/_work/
+
+# Gradle / Android Studio.
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/.idea/
+*.iml

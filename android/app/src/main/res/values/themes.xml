@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Blender" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/blender_background</item>
+        <item name="android:statusBarColor">@color/blender_background</item>
+        <item name="android:navigationBarColor">@color/blender_background</item>
+    </style>
+
+    <style name="Theme.Blender.Launcher" parent="Theme.Blender" />
+
+    <style name="Theme.Blender.Fullscreen" parent="Theme.Blender">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">never</item>
+    </style>
+</resources>
