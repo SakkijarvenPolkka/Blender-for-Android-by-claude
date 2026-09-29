@@ -11,6 +11,31 @@ val nativeLibsDir = (findProperty("blender.nativeLibsDir") as String?) ?: "$work
 val assetsDir = (findProperty("blender.assetsDir") as String?) ?: "$workDir/apk/assets"
 val sdlJavaDir = (findProperty("blender.sdlJavaDir") as String?)
     ?: "$workDir/android_arm64_libs/share/sdl3-java"
+// SDL3's Java sources, with a larger stack for the thread running Blender (SDL starts it with
+// the default stack size of about 1MB, desktop systems give the main thread 8MB): deep recursion
+// (Python, node trees, file formats) would overflow it.
+val sdlJavaGenDir = layout.buildDirectory.dir("generated/sdl-java").get().asFile
+val sdlThreadStackSize = 16L * 1024 * 1024
+val prepareSdlJava by tasks.registering(Sync::class) {
+    from(sdlJavaDir)
+    into(sdlJavaGenDir)
+    filesMatching("**/SDLActivity.java") {
+        filter { line ->
+            line.replace(
+                "new Thread(new SDLMain(), \"SDLThread\")",
+                "new Thread(null, new SDLMain(), \"SDLThread\", ${sdlThreadStackSize}L)"
+            )
+        }
+    }
+    doLast {
+        val activity = sdlJavaGenDir.walk().first { it.name == "SDLActivity.java" }
+        check(activity.readText().contains("\"SDLThread\", ${sdlThreadStackSize}L)")) {
+            "SDLActivity.java: the SDL thread creation changed, update prepareSdlJava"
+        }
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(prepareSdlJava) }
+
 val blenderVersion = (findProperty("blender.version") as String?) ?: "5.2.2"
 val portRevision = ((findProperty("blender.portRevision") as String?) ?: "1").toInt()
 
@@ -42,7 +67,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("src/main/java", sdlJavaDir)
+            java.srcDirs("src/main/java", sdlJavaGenDir)
             jniLibs.srcDirs(nativeLibsDir)
             assets.srcDirs(assetsDir)
         }
