@@ -23,6 +23,7 @@ ExternalProject_Add(external_python_host_tools
   INSTALL_COMMAND ${HOST_PYTHON_EXECUTABLE} -m ensurepip --upgrade
     COMMAND ${HOST_PYTHON_EXECUTABLE} -m pip install --no-cache-dir
     cython==${CYTHON_VERSION}
+    meson==${MESON_VERSION}
     setuptools==${SETUPTOOLS_VERSION}
     wheel
   LOG_INSTALL ON

@@ -9,110 +9,46 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A build takes hours and continues from the caches of the previous one: a new push waits for
+  # the running build instead of cancelling it (only the latest waiting build is kept).
+  cancel-in-progress: false
 
+# The work is split in stages that each fit in a job (6 hours on GitHub-hosted runners) and
+# continue from the caches of the previous stage. Later stages are skipped when there's nothing
+# left to do (e.g. dependencies found in the cache).
 jobs:
-  build:
-    name: Blender for Android (arm64-v8a)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 350
+  deps-1:
+    uses: ./.github/workflows/deps.yml
+    with:
+      stage: 1
+
+  deps-2:
+    needs: deps-1
+    if: needs.deps-1.outputs.complete != 'true'
+    uses: ./.github/workflows/deps.yml
+    with:
+      stage: 2
+      last-stage: true
+
+  blender-1:
+    needs: [deps-1, deps-2]
+    if: >-
+      !cancelled() && needs.deps-1.result == 'success' &&
+      (needs.deps-1.outputs.complete == 'true' || needs.deps-2.outputs.complete == 'true')
     permissions:
       contents: write
-    env:
-      WORK_DIR: ${{ github.workspace }}/_work
-      CCACHE_DIR: ${{ github.workspace }}/_work/ccache
-      CCACHE_MAXSIZE: 3G
-      CCACHE_COMPRESS: "1"
-    steps:
-      - uses: actions/checkout@v4
+    uses: ./.github/workflows/blender.yml
+    with:
+      stage: 1
+      deps-cache-key: ${{ needs.deps-1.outputs.cache-key }}
 
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules || true
-          df -h "${GITHUB_WORKSPACE}"
-
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build qemu-user-static ccache autoconf automake libtool pkg-config \
-            patch zip unzip e2fsprogs libssl-dev zlib1g-dev libffi-dev
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      # Caches are saved right after the step producing them (not at the end of the job),
-      # so a failure in a later step doesn't throw away hours of compilation.
-      - name: Restore dependencies
-        id: deps-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            _work/android_arm64_libs
-            _work/host_python
-            _work/downloads
-          key: deps-${{ runner.os }}-${{ hashFiles('BLENDER_VERSION', 'deps/**', 'scripts/env.sh', 'scripts/build_deps.sh') }}
-
-      - name: Restore compiler cache
-        uses: actions/cache/restore@v4
-        with:
-          path: _work/ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: ccache-${{ runner.os }}-
-
-      - name: Android SDK & NDK
-        run: |
-          export ANDROID_HOME="${ANDROID_SDK_ROOT}"
-          echo "ANDROID_HOME=${ANDROID_HOME}" >> "${GITHUB_ENV}"
-          ./scripts/setup_sdk.sh
-
-      - name: Blender source
-        run: ./scripts/fetch_blender.sh
-
-      - name: Dependencies
-        run: ./scripts/build_deps.sh
-
-      - name: Save dependencies
-        if: steps.deps-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            _work/android_arm64_libs
-            _work/host_python
-            _work/downloads
-          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
-
-      - name: Blender
-        run: |
-          ./scripts/build_blender.sh
-          ccache --show-stats || true
-
-      - name: Save compiler cache
-        if: always() && !cancelled()
-        uses: actions/cache/save@v4
-        with:
-          path: _work/ccache
-          key: ccache-${{ runner.os }}-${{ github.sha }}
-
-      # Runs the Android build in background mode with QEMU user-mode emulation and Android's
-      # bionic libraries: Python, modeling, file I/O and Cycles rendering.
-      - name: Smoke test (QEMU)
-        run: ./tests/qemu/run_blender.sh
-
-      - name: APK
-        run: ./scripts/package_apk.sh
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: blender-android-arm64-apk
-          path: _work/out/*.apk
-          if-no-files-found: error
-
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: _work/out/*.apk
+  blender-2:
+    needs: [deps-1, blender-1]
+    if: needs.blender-1.result == 'success' && needs.blender-1.outputs.complete != 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/blender.yml
+    with:
+      stage: 2
+      deps-cache-key: ${{ needs.deps-1.outputs.cache-key }}
+      last-stage: true

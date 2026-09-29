@@ -426,8 +426,38 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_header(key, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        if body:
+        if body and self.command != "HEAD":
             self.wfile.write(body)
+
+    def _read_body(self) -> bytes | None:
+        """Reads the request body (with a length or chunked), None when it's invalid or too large."""
+        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+            # Sent by some proxies & tunnels.
+            chunks = []
+            size = 0
+            while True:
+                line = self.rfile.readline(1024)
+                try:
+                    chunk_size = int(line.split(b";", 1)[0].strip(), 16)
+                except ValueError:
+                    return None
+                if chunk_size == 0:
+                    # Trailers end with an empty line.
+                    while self.rfile.readline(1024).strip():
+                        pass
+                    return b"".join(chunks)
+                size += chunk_size
+                if size > MAX_REQUEST_SIZE:
+                    return None
+                chunks.append(self.rfile.read(chunk_size))
+                self.rfile.readline(1024)
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return None
+        if length < 0 or length > MAX_REQUEST_SIZE:
+            return None
+        return self.rfile.read(length)
 
     def _check_request(self) -> bool:
         """Checks the end-point, authentication and origin, sends an error response on failure."""
@@ -454,6 +484,16 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
         # No server initiated stream.
         self._send_json(405, None, {"Allow": "POST"})
 
+    # Some clients probe the end-point first, don't reply "501 Not Implemented" (the default).
+    do_HEAD = do_GET
+
+    def do_OPTIONS(self) -> None:
+        # No cross-origin requests (CORS): browsers only get the allowed methods.
+        if self.mcp.check_path(self.path, None) is None:
+            self._send_json(404, None)
+            return
+        self._send_json(204, None, {"Allow": "GET, HEAD, POST, DELETE, OPTIONS"})
+
     def do_DELETE(self) -> None:
         if not self._check_request():
             return
@@ -463,15 +503,14 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._check_request():
             return
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            length = -1
-        if length < 0 or length > MAX_REQUEST_SIZE:
-            self._send_json(413 if length > 0 else 400, _error_response(None, INVALID_REQUEST, "Invalid length"))
+        body = self._read_body()
+        if body is None:
+            self._send_json(413, _error_response(None, INVALID_REQUEST, "Invalid or too large request"),
+                            {"Connection": "close"})
+            self.close_connection = True
             return
         try:
-            message = json.loads(self.rfile.read(length).decode("utf-8"))
+            message = json.loads(body.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             self._send_json(400, _error_response(None, PARSE_ERROR, "Parse error"))
             return

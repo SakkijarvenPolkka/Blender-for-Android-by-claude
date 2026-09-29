@@ -1,0 +1,148 @@
+# Builds Blender, runs the QEMU tests and packages the APK, called by `build-apk.yml`.
+#
+# Without a compiler cache, compiling Blender may not fit in one job: the build stops in time to
+# save the cache (ccache) and the next stage continues from there.
+
+name: Blender
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        type: number
+        required: true
+      deps-cache-key:
+        type: string
+        required: true
+      last-stage:
+        description: Fail when the build is still incomplete after this stage
+        type: boolean
+        default: false
+    outputs:
+      complete:
+        description: "'true' when the APK was built"
+        value: ${{ jobs.blender.outputs.complete }}
+
+jobs:
+  blender:
+    name: Blender & APK (stage ${{ inputs.stage }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    permissions:
+      contents: write
+    outputs:
+      complete: ${{ steps.result.outputs.complete }}
+    env:
+      WORK_DIR: ${{ github.workspace }}/_work
+      CCACHE_DIR: ${{ github.workspace }}/_work/ccache
+      CCACHE_MAXSIZE: 3G
+      CCACHE_COMPRESS: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules || true
+          df -h "${GITHUB_WORKSPACE}"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build qemu-user-static ccache autoconf automake libtool pkg-config \
+            patch zip unzip e2fsprogs libssl-dev zlib1g-dev libffi-dev
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Restore dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            _work/android_arm64_libs
+            _work/host_python
+            _work/downloads
+          key: ${{ inputs.deps-cache-key }}
+          fail-on-cache-miss: true
+
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
+        with:
+          path: _work/ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.stage }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: Android SDK & NDK
+        run: |
+          export ANDROID_HOME="${ANDROID_SDK_ROOT}"
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "${GITHUB_ENV}"
+          ./scripts/setup_sdk.sh
+
+      - name: Blender source
+        run: ./scripts/fetch_blender.sh
+
+      - name: Dependencies
+        # Only checks that the cached dependencies are up to date.
+        run: ./scripts/build_deps.sh
+
+      - name: Blender
+        id: build
+        env:
+          # Leaves time to save the compiler cache.
+          BLENDER_TIME_LIMIT: 300m
+        run: |
+          status=0
+          ./scripts/build_blender.sh || status=$?
+          ccache --show-stats || true
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+
+      - name: Save compiler cache
+        if: steps.build.outputs.status != ''
+        uses: actions/cache/save@v4
+        with:
+          path: _work/ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.stage }}
+
+      # Runs the Android build in background mode with QEMU user-mode emulation and Android's
+      # bionic libraries: Python, modeling, file I/O, rendering, video and the MCP server.
+      - name: Smoke test (QEMU)
+        if: steps.build.outputs.status == '0'
+        run: ./tests/qemu/run_blender.sh
+
+      - name: APK
+        if: steps.build.outputs.status == '0'
+        run: ./scripts/package_apk.sh
+
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outputs.status == '0'
+        with:
+          name: blender-android-arm64-apk
+          path: _work/out/*.apk
+          if-no-files-found: error
+
+      - name: Release
+        if: steps.build.outputs.status == '0' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: _work/out/*.apk
+
+      - name: Result
+        id: result
+        run: |
+          case "${{ steps.build.outputs.status }}" in
+            0)
+              echo "complete=true" >> "${GITHUB_OUTPUT}" ;;
+            124)
+              echo "complete=false" >> "${GITHUB_OUTPUT}"
+              if [ "${{ inputs.last-stage }}" = "true" ]; then
+                echo "::error::Build incomplete, run the workflow again to continue (with ccache)"
+                exit 1
+              fi
+              echo "::notice::Time limit reached, the next stage continues the build" ;;
+            *)
+              echo "::error::Building Blender failed (see the Blender step)"
+              exit 1 ;;
+          esac

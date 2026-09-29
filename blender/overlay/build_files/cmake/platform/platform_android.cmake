@@ -32,19 +32,16 @@ set(CMAKE_PREFIX_PATH ${LIBDIR})
 foreach(_root
     OPENEXR IMATH OPENJPH OPENIMAGEIO OPENCOLORIO JPEG PNG ZLIB ZSTD EPOXY FMT FREETYPE BROTLI
     PYTHON OPENJPEG SDL FFTW3 WEBP PUGIXML TBB GMP POTRACE OPENSUBDIV VULKAN SHADERC
-    SSE2NEON EIGEN3 MANIFOLD)
+    SSE2NEON EIGEN3 MANIFOLD FFMPEG LIBSNDFILE HARFBUZZ FRIBIDI HARU)
   set(${_root}_ROOT_DIR ${LIBDIR})
 endforeach()
 unset(_root)
-set(OpenEXR_ROOT ${LIBDIR})
-set(Imath_ROOT ${LIBDIR})
-set(openjph_ROOT ${LIBDIR})
-set(OpenImageIO_ROOT ${LIBDIR})
-set(OpenColorIO_ROOT ${LIBDIR})
-set(fmt_ROOT ${LIBDIR})
-set(Eigen3_ROOT ${LIBDIR})
-set(TBB_ROOT ${LIBDIR})
-set(manifold_ROOT ${LIBDIR})
+foreach(_package
+    OpenEXR Imath openjph OpenImageIO OpenColorIO fmt Eigen3 TBB manifold absl Ceres draco
+    meshoptimizer)
+  set(${_package}_ROOT ${LIBDIR})
+endforeach()
+unset(_package)
 
 macro(find_package_wrapper)
   find_package_static(${ARGV})
@@ -130,6 +127,23 @@ if(WITH_FFTW3)
   set_and_warn_library_found("fftw3" FFTW3_FOUND WITH_FFTW3)
 endif()
 
+# Codecs
+if(WITH_CODEC_SNDFILE)
+  find_package_wrapper(SndFile)
+  set_and_warn_library_found("libsndfile" SNDFILE_FOUND WITH_CODEC_SNDFILE)
+endif()
+
+if(WITH_CODEC_FFMPEG)
+  set(FFMPEG_ROOT_DIR ${LIBDIR})
+  # Also the static codec libraries, in link order.
+  set(FFMPEG_FIND_COMPONENTS
+    avformat avdevice avfilter avcodec avutil swresample swscale
+    x264 x265 vpx aom opus theoraenc theoradec vorbisenc vorbis ogg mp3lame
+  )
+  find_package(FFmpeg)
+  set_and_warn_library_found("FFmpeg" FFMPEG_FOUND WITH_CODEC_FFMPEG)
+endif()
+
 test_neon_support()
 if(SUPPORTS_NEON_BUILD)
   find_package_wrapper(sse2neon REQUIRED)
@@ -211,15 +225,38 @@ mark_as_advanced(Eigen3_DIR)
 
 if(WITH_LIBMV)
   find_package_wrapper(Ceres REQUIRED)
-  mark_as_advanced(Ceres_DIR)
+  mark_as_advanced(Ceres_DIR absl_DIR)
+endif()
+
+if(WITH_HARU)
+  find_package_wrapper(Haru)
+  set_and_warn_library_found("Haru" HARU_FOUND WITH_HARU)
+endif()
+
+# glTF mesh compression, linked into bridge libraries loaded by the glTF add-on.
+if(WITH_DRACO)
+  find_package_wrapper(draco)
+  if(TARGET draco::draco)
+    set(DRACO_FOUND TRUE)
+  endif()
+  set_and_warn_library_found("Draco" DRACO_FOUND WITH_DRACO)
+  mark_as_advanced(draco_DIR)
+endif()
+if(WITH_MESHOPTIMIZER)
+  find_package_wrapper(meshoptimizer)
+  if(TARGET meshoptimizer::meshoptimizer)
+    set(MESHOPTIMIZER_FOUND TRUE)
+  endif()
+  set_and_warn_library_found("meshoptimizer" MESHOPTIMIZER_FOUND WITH_MESHOPTIMIZER)
+  mark_as_advanced(meshoptimizer_DIR)
 endif()
 
 # Features that are not available (yet) on Android.
 foreach(_option
-    WITH_CODEC_FFMPEG WITH_CODEC_SNDFILE WITH_OPENAL WITH_JACK WITH_PULSEAUDIO WITH_PIPEWIRE
+    WITH_OPENAL WITH_JACK WITH_PULSEAUDIO WITH_PIPEWIRE
     WITH_INPUT_NDOF WITH_CYCLES_OSL WITH_CYCLES_EMBREE WITH_CYCLES_PATH_GUIDING WITH_OPENVDB
     WITH_NANOVDB WITH_ALEMBIC WITH_USD WITH_MATERIALX WITH_HYDRA WITH_OPENIMAGEDENOISE WITH_LLVM
-    WITH_XR_OPENXR WITH_HARU WITH_RUBBERBAND WITH_DRACO WITH_MESHOPTIMIZER WITH_TRACY
+    WITH_XR_OPENXR WITH_RUBBERBAND WITH_TRACY
     WITH_GHOST_X11 WITH_GHOST_WAYLAND WITH_SYSTEM_AUDASPACE)
   if(${_option})
     message(STATUS "${_option} is not supported on Android, disabling")

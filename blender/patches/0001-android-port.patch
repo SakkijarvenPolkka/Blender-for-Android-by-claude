@@ -120,6 +120,21 @@ index 2804842..7029a46 100644
  else()
  	set(LIBRARIES ${CMAKE_DL_LIBS} -lpthread)
  endif()
+diff --git a/extern/glog/src/config_linux.h b/extern/glog/src/config_linux.h
+index b3a3325..3f56042 100644
+--- a/extern/glog/src/config_linux.h
++++ b/extern/glog/src/config_linux.h
+@@ -14,7 +14,10 @@
+ #define HAVE_DLFCN_H
+ 
+ /* Define to 1 if you have the <execinfo.h> header file. */
++/* On Android, `backtrace()` is only available from API level 33. */
++#if !defined(__ANDROID__) || __ANDROID_API__ >= 33
+ #define HAVE_EXECINFO_H
++#endif
+ 
+ /* Define if you have the `fcntl' function */
+ #define HAVE_FCNTL
 diff --git a/extern/vulkan_memory_allocator/vk_mem_alloc_impl.cc b/extern/vulkan_memory_allocator/vk_mem_alloc_impl.cc
 index 5401870..a3a8240 100644
 --- a/extern/vulkan_memory_allocator/vk_mem_alloc_impl.cc
@@ -793,6 +808,21 @@ index c563730..9e221ba 100644
  
      for asset_lib in bpy.context.preferences.filepaths.asset_libraries:
          if not asset_lib.enabled:
+diff --git a/scripts/addons_core/io_scene_gltf2/io/com/library.py b/scripts/addons_core/io_scene_gltf2/io/com/library.py
+index 96e5946..e6d3d10 100644
+--- a/scripts/addons_core/io_scene_gltf2/io/com/library.py
++++ b/scripts/addons_core/io_scene_gltf2/io/com/library.py
+@@ -22,6 +22,10 @@ def dll_path(lib_name, lib_display_name) -> Path | None:
+         library_name = 'lib{}.dylib'.format(lib_name)
+         # Bundled beside the add-on's `__init__.py`.
+         base = os.path.dirname(sys.modules['io_scene_gltf2'].__file__)
++    elif sys.platform == 'android':
++        library_name = 'lib{}.so'.format(lib_name)
++        # Bundled beside the add-on's `__init__.py` (extracted with the application data).
++        base = os.path.dirname(sys.modules['io_scene_gltf2'].__file__)
+     else:
+         # Linux, BSD & other UNIX-like systems.
+         library_name = 'lib{}.so'.format(lib_name)
 diff --git a/scripts/modules/_bpy_internal/http/downloader.py b/scripts/modules/_bpy_internal/http/downloader.py
 index 5321da1..6d30f48 100644
 --- a/scripts/modules/_bpy_internal/http/downloader.py
@@ -1208,7 +1238,7 @@ index 4c0aa2c..9077d57 100644
    if (UNLIKELY(g_system == nullptr)) {
      /* GHOST will have reported the back-ends that failed to load. */
 diff --git a/source/creator/CMakeLists.txt b/source/creator/CMakeLists.txt
-index 985b969..d379b52 100644
+index 985b969..5fd1dff 100644
 --- a/source/creator/CMakeLists.txt
 +++ b/source/creator/CMakeLists.txt
 @@ -149,6 +149,18 @@ set(SRC
@@ -1247,7 +1277,17 @@ index 985b969..d379b52 100644
  else()
    add_executable(blender ${EXETYPE} ${SRC})
    if(WITH_CPU_CHECK)
-@@ -750,7 +772,39 @@ endfunction()
+@@ -500,7 +522,8 @@ if(WITH_PYTHON)
+   # The glTF add-on's draco & meshopt bridge libraries, loaded at run-time by `io_scene_gltf2`.
+   # Portable Linux builds place them in `lib` beside their bundled dependencies (found via each
+   # target's `$ORIGIN` RPATH); otherwise beside the add-on where `library.py` looks for them.
+-  if(UNIX AND NOT APPLE AND WITH_INSTALL_PORTABLE)
++  # On Android only the version directory is packaged (as application data).
++  if(UNIX AND NOT APPLE AND NOT ANDROID AND WITH_INSTALL_PORTABLE)
+     set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_LIB}")
+   else()
+     set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_VER_LIBS}/scripts/addons_core/io_scene_gltf2")
+@@ -750,7 +773,39 @@ endfunction()
  # -----------------------------------------------------------------------------
  # Install Targets (Platform Specific)
  

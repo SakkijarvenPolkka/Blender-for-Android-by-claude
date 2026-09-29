@@ -4,11 +4,13 @@ Smoke test for the Android build of Blender, run in background mode:
 
   blender --background --factory-startup -noaudio --python smoke_test.py -- <output-dir>
 
-Exercises Python (standard library extension modules), modeling (OpenSubdiv, Manifold
-booleans), file I/O (.blend, OBJ, PLY, STL, image formats through OpenImageIO), color
-management (OpenColorIO) and rendering with Cycles on the CPU.
+Exercises Python (standard library extension modules, bundled packages), modeling (OpenSubdiv,
+Manifold booleans), file I/O (.blend, OBJ, PLY, STL, glTF with Draco & meshoptimizer
+compression, FBX, image formats through OpenImageIO), color management (OpenColorIO), rendering
+with Cycles on the CPU, video encoding & decoding (FFmpeg) and audio files (libsndfile, FFmpeg).
 """
 
+import glob
 import os
 import sys
 import time
@@ -71,6 +73,25 @@ def main():
     check(abs(numpy.linalg.det(numpy.diag([2.0, 3.0])) - 6.0) < 1e-9, "numpy " + numpy.__version__)
     check(requests.__version__ and certifi.where().endswith("cacert.pem"), "requests " + requests.__version__)
     check(hasattr(aud, "Sound"), "aud")
+
+    # Optional libraries.
+    options = bpy.app.build_options
+    for option in ("codec_ffmpeg", "codec_sndfile", "libmv", "haru"):
+        check(getattr(options, option), "build option " + option)
+    check(bpy.app.ffmpeg.supported, "FFmpeg (avcodec {:s})".format(bpy.app.ffmpeg.avcodec_version_string))
+
+    # Audio files, written & read back through libsndfile (WAV, FLAC, Ogg) and FFmpeg (MP3).
+    tone = aud.Sound.sine(440, 48000).limit(0, 0.5)
+    for container, codec, extension in (
+        (aud.CONTAINER_WAV, aud.CODEC_PCM, "wav"),
+        (aud.CONTAINER_FLAC, aud.CODEC_FLAC, "flac"),
+        (aud.CONTAINER_OGG, aud.CODEC_VORBIS, "ogg"),
+        (aud.CONTAINER_MP3, aud.CODEC_MP3, "mp3"),
+    ):
+        path = os.path.join(output_dir, "tone." + extension)
+        tone.write(path, 48000, aud.CHANNELS_MONO, aud.FORMAT_S16, container, codec)
+        samples = aud.Sound(path).data()
+        check(abs(len(samples) - 24000) < 4800, "audio {:s}: {:d} samples".format(extension, len(samples)))
 
     scene = bpy.context.scene
     cube = bpy.data.objects["Cube"]
@@ -145,6 +166,35 @@ def main():
         bpy.ops.render.render(write_still=True)
         check(os.path.exists(path), "Cycles render to {:s} ({:.1f}s)".format(file_format, time.time() - start))
 
+    # Video through FFmpeg: render short animations and read them back.
+    scene.cycles.samples = 1
+    scene.frame_start = 1
+    scene.frame_end = 4
+    scene.render.image_settings.media_type = 'VIDEO'
+    scene.render.image_settings.file_format = 'FFMPEG'
+    for container, codec, audio_codec in (
+        ('MPEG4', 'H264', 'AAC'),
+        ('MPEG4', 'H265', 'NONE'),
+        ('WEBM', 'WEBM', 'OPUS'),
+        ('MKV', 'AV1', 'MP3'),
+    ):
+        scene.render.ffmpeg.format = container
+        scene.render.ffmpeg.codec = codec
+        scene.render.ffmpeg.audio_codec = audio_codec
+        prefix = os.path.join(output_dir, "video_{:s}_".format(codec.lower()))
+        for path in glob.glob(prefix + "*"):
+            os.remove(path)
+        scene.render.filepath = prefix
+        start = time.time()
+        bpy.ops.render.render(animation=True)
+        paths = glob.glob(prefix + "*")
+        check(len(paths) == 1, "render video {:s}/{:s} ({:.1f}s)".format(container, codec, time.time() - start))
+        clip = bpy.data.movieclips.load(paths[0])
+        check(clip.frame_duration == 4 and tuple(clip.size) == (64, 48),
+              "load video {:s}: {:d} frames {:d}x{:d}".format(
+                  os.path.basename(paths[0]), clip.frame_duration, *clip.size))
+    scene.render.image_settings.media_type = 'IMAGE'
+
     # Read back through OpenImageIO & OpenColorIO.
     image = bpy.data.images.load(os.path.join(output_dir, "render.png"))
     check(tuple(image.size) == (64, 48), "load PNG ({:d}x{:d})".format(*image.size))
@@ -152,6 +202,22 @@ def main():
     check(any(value > 0.0 for value in pixels[:3]) or True, "pixel access")
     check(scene.view_settings.view_transform in {'AgX', 'Standard', 'Filmic', 'Khronos PBR Neutral'},
           "color management: " + scene.view_settings.view_transform)
+
+    # glTF mesh compression (Draco & meshoptimizer bridge libraries).
+    from io_scene_gltf2 import is_draco_available, is_meshopt_available
+    check(is_draco_available(), "glTF: Draco library")
+    check(is_meshopt_available(), "glTF: meshoptimizer library")
+    for name, extension_name, settings in (
+        ("Draco", b"KHR_draco_mesh_compression", {"export_draco_mesh_compression_enable": True}),
+        ("meshopt", b"_meshopt_compression", {"export_meshopt_compression_enable": True}),
+    ):
+        path = os.path.join(output_dir, "compressed_{:s}.glb".format(name.lower()))
+        bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', **settings)
+        with open(path, "rb") as fh:
+            check(extension_name in fh.read(), "glTF export with {:s} compression".format(name))
+        meshes = len(bpy.data.meshes)
+        bpy.ops.import_scene.gltf(filepath=path)
+        check(len(bpy.data.meshes) > meshes, "glTF import with {:s} compression".format(name))
 
     log("ALL TESTS PASSED")
 

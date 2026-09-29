@@ -34,7 +34,20 @@ cmake -G Ninja -S "${BLENDER_SRC_DIR}" -B "${BLENDER_BUILD_DIR}" \
   "${extra_args[@]}"
 
 log "Building Blender"
-cmake --build "${BLENDER_BUILD_DIR}" -j "${JOBS}" "$@"
+# BLENDER_TIME_LIMIT (e.g. `4h`, see `timeout`) stops the build in time to keep the compiler
+# cache (CI), the next build continues from there.
+if [ -n "${BLENDER_TIME_LIMIT:-}" ]; then
+  status=0
+  timeout --signal=INT --kill-after=5m "${BLENDER_TIME_LIMIT}" \
+    cmake --build "${BLENDER_BUILD_DIR}" -j "${JOBS}" "$@" || status=$?
+  if [ "${status}" -eq 124 ]; then
+    log "Time limit (${BLENDER_TIME_LIMIT}) reached, build again to continue (with ccache)"
+    exit 124
+  fi
+  [ "${status}" -eq 0 ] || die "Building Blender failed"
+else
+  cmake --build "${BLENDER_BUILD_DIR}" -j "${JOBS}" "$@"
+fi
 
 log "Installing to ${BLENDER_INSTALL_DIR}"
 rm -rf "${BLENDER_INSTALL_DIR}"

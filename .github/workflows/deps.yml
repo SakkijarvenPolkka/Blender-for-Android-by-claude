@@ -1,0 +1,140 @@
+# Builds the dependencies (`deps/`) into a cache, called by `build-apk.yml`.
+#
+# A cold build of all dependencies doesn't fit in one job (6 hours on GitHub-hosted runners):
+# each stage builds for a limited time and caches what it built, the next stage continues from
+# there (see "Incremental builds" in `deps/cmake/options.cmake`). Once complete, the cache is
+# saved under the key of the dependency configuration, which is reused until `deps/` changes.
+
+name: Dependencies
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        type: number
+        required: true
+      last-stage:
+        description: Fail when the dependencies are still incomplete after this stage
+        type: boolean
+        default: false
+    outputs:
+      complete:
+        description: "'true' when all dependencies are in the cache"
+        value: ${{ jobs.deps.outputs.complete }}
+      cache-key:
+        value: ${{ jobs.deps.outputs.cache-key }}
+
+jobs:
+  deps:
+    name: Dependencies (stage ${{ inputs.stage }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    outputs:
+      complete: ${{ steps.result.outputs.complete }}
+      cache-key: ${{ steps.key.outputs.key }}
+    env:
+      WORK_DIR: ${{ github.workspace }}/_work
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache key
+        id: key
+        run: |
+          echo "key=deps-${{ runner.os }}-${{ hashFiles('BLENDER_VERSION', 'deps/**', 'scripts/env.sh', 'scripts/build_deps.sh') }}" \
+            >> "${GITHUB_OUTPUT}"
+
+      - name: Restore dependencies
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            _work/android_arm64_libs
+            _work/host_python
+            _work/downloads
+          key: ${{ steps.key.outputs.key }}
+          # Continue from a partial build of this configuration, or from an earlier
+          # configuration (only added or changed dependencies are built).
+          restore-keys: |
+            ${{ steps.key.outputs.key }}-partial-
+            deps-${{ runner.os }}-
+
+      - name: Free disk space
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk /opt/ghc /usr/local/share/boost \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules || true
+          df -h "${GITHUB_WORKSPACE}"
+
+      - name: Install build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build qemu-user-static autoconf automake libtool pkg-config \
+            patch zip unzip libssl-dev zlib1g-dev libffi-dev
+
+      - uses: actions/setup-java@v4
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK & NDK
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          export ANDROID_HOME="${ANDROID_SDK_ROOT}"
+          echo "ANDROID_HOME=${ANDROID_HOME}" >> "${GITHUB_ENV}"
+          ./scripts/setup_sdk.sh
+
+      - name: Blender source
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ./scripts/fetch_blender.sh
+
+      - name: Build
+        id: build
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          # Leaves time to save the cache.
+          DEPS_TIME_LIMIT: 300m
+        run: |
+          status=0
+          ./scripts/build_deps.sh || status=$?
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+
+      - name: Save dependencies
+        if: steps.build.outputs.status == '0'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            _work/android_arm64_libs
+            _work/host_python
+            _work/downloads
+          key: ${{ steps.key.outputs.key }}
+
+      # Also after a failure: the next build only builds what's left.
+      - name: Save partial build
+        if: steps.build.outputs.status != '' && steps.build.outputs.status != '0'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            _work/android_arm64_libs
+            _work/host_python
+            _work/downloads
+          key: ${{ steps.key.outputs.key }}-partial-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.stage }}
+
+      - name: Result
+        id: result
+        run: |
+          if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ] || [ "${{ steps.build.outputs.status }}" = "0" ]; then
+            echo "complete=true" >> "${GITHUB_OUTPUT}"
+          elif [ "${{ steps.build.outputs.status }}" = "124" ]; then
+            echo "complete=false" >> "${GITHUB_OUTPUT}"
+            if [ "${{ inputs.last-stage }}" = "true" ]; then
+              echo "::error::Dependencies incomplete, run the workflow again to continue"
+              exit 1
+            fi
+            echo "::notice::Time limit reached, the next stage continues the build"
+          else
+            echo "::error::Building the dependencies failed (see the Build step)"
+            exit 1
+          fi

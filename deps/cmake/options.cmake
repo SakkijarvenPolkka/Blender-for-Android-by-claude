@@ -114,11 +114,64 @@ function(dep_download_args prefix out)
   set(${out} ${_args} PARENT_SCOPE)
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Incremental builds
+#
+# Once a dependency is installed, `scripts/build_deps.sh` writes a hash of its settings to
+# `${LIBDIR}/.deps/<target>`. Dependencies with an up to date marker are not built again, also
+# with a new build directory: from a cached `${LIBDIR}` (CI), only dependencies that were added
+# or changed are built.
+
+set(DEPS_MARKER_DIR ${LIBDIR}/.deps)
+# Hashes of the dependencies to build, see `build_deps.sh`.
+set(DEPS_HASH_DIR ${CMAKE_BINARY_DIR}/deps_hashes)
+file(REMOVE_RECURSE ${DEPS_HASH_DIR})
+file(MAKE_DIRECTORY ${DEPS_HASH_DIR})
+# Dependencies creating files in the build directory (which isn't kept).
+set(DEPS_ALWAYS_BUILD external_cross_python)
+
+function(ExternalProject_Add name)
+  # The settings without the number of parallel jobs (a property of the machine), with the
+  # contents of patches & scripts, and extra settings of the caller (e.g. post-install steps).
+  set(_args ${ARGN} ${DEPS_EXTRA_SETTINGS})
+  string(REGEX REPLACE "-j;?${DEPS_JOBS}(;|$)" "-j\\1" _settings "${_args}")
+  # Independent of the build directory.
+  string(REPLACE "${CMAKE_BINARY_DIR}" "<BUILD>" _settings "${_settings}")
+  foreach(_arg ${_args})
+    if(_arg MATCHES "\\.(diff|patch|cmake|py|ini|map)$" AND EXISTS "${_arg}" AND NOT IS_DIRECTORY "${_arg}")
+      file(READ "${_arg}" _content)
+      string(REPLACE "${CMAKE_BINARY_DIR}" "<BUILD>" _content "${_content}")
+      string(SHA256 _content_hash "${_content}")
+      string(APPEND _settings ";${_content_hash}")
+    endif()
+  endforeach()
+  string(SHA256 _hash "${_settings}")
+
+  if((NOT name IN_LIST DEPS_ALWAYS_BUILD) AND (EXISTS ${DEPS_MARKER_DIR}/${name}))
+    file(STRINGS ${DEPS_MARKER_DIR}/${name} _installed_hash LIMIT_COUNT 1)
+    if(_installed_hash STREQUAL _hash)
+      # Nothing to build, the target is still there for the projects depending on it.
+      add_custom_target(${name})
+      set_property(TARGET ${name} PROPERTY DEPS_INSTALLED TRUE)
+      return()
+    endif()
+  endif()
+
+  file(WRITE ${DEPS_HASH_DIR}/${name} "${_hash}\n")
+  # Forward the arguments as they are (`${ARGN}` would drop empty ones, e.g. `BUILD_COMMAND ""`).
+  set(_call "_ExternalProject_Add(${name}")
+  math(EXPR _last "${ARGC} - 1")
+  foreach(_i RANGE 1 ${_last})
+    string(APPEND _call " [==[${ARGV${_i}}]==]")
+  endforeach()
+  cmake_language(EVAL CODE "${_call})")
+endfunction()
+
 # Helper for CMake based dependencies:
 #
 #   add_cmake_dep(<target-name> <VERSIONS_PREFIX>
 #     [SOURCE_SUBDIR <dir>] [DEPENDS <targets...>] [PATCHES <files...>]
-#     [CMAKE_ARGS <args...>])
+#     [CMAKE_ARGS <args...>] [POST_INSTALL <ExternalProject_Add_Step arguments...>])
 function(add_cmake_dep name prefix)
   cmake_parse_arguments(ARG "" "SOURCE_SUBDIR" "DEPENDS;PATCHES;CMAKE_ARGS;POST_INSTALL" ${ARGN})
   set(_patch_command)
@@ -134,6 +187,7 @@ function(add_cmake_dep name prefix)
     set(_source_subdir SOURCE_SUBDIR ${ARG_SOURCE_SUBDIR})
   endif()
   dep_download_args(${prefix} _dl)
+  set(DEPS_EXTRA_SETTINGS ${ARG_POST_INSTALL})
   ExternalProject_Add(external_${name}
     ${_dl}
     PREFIX ${CMAKE_BINARY_DIR}/${name}
@@ -149,7 +203,8 @@ function(add_cmake_dep name prefix)
     LOG_INSTALL ON
     LOG_OUTPUT_ON_FAILURE ON
   )
-  if(ARG_POST_INSTALL)
+  get_property(_installed TARGET external_${name} PROPERTY DEPS_INSTALLED)
+  if(ARG_POST_INSTALL AND NOT _installed)
     ExternalProject_Add_Step(external_${name} post_install
       ${ARG_POST_INSTALL}
       DEPENDEES install
