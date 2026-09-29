@@ -1,6 +1,9 @@
 package com.github.sakkijarvenpolkka.blender;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Log;
@@ -43,6 +46,40 @@ public class BlenderActivity extends SDLActivity {
             mLayout.addView(toolbar, params);
             toolbar.setGravity(Gravity.CENTER);
         }
+    }
+
+    private int keepAliveCount = 0;
+
+    /**
+     * Keep Blender running in the background (called by Blender, see
+     * `blender_android_keep_alive` in `creator_android.cc`). Requests are counted.
+     */
+    public void setKeepAlive(boolean enable) {
+        runOnUiThread(() -> {
+            keepAliveCount = Math.max(0, keepAliveCount + (enable ? 1 : -1));
+            if (keepAliveCount > 0) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                           != PackageManager.PERMISSION_GRANTED) {
+                    // The service runs without, but its notification (to return to Blender or
+                    // notice that it's running) is only shown with the permission.
+                    requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 0);
+                }
+                try {
+                    BackgroundService.start(this);
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "Unable to start the background service", e);
+                }
+            } else {
+                BackgroundService.stop(this);
+            }
+        });
+    }
+
+    @Override
+    protected void onDestroy() {
+        BackgroundService.stop(this);
+        super.onDestroy();
     }
 
     @Override

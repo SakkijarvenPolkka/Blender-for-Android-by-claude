@@ -2,7 +2,7 @@
  *
  * SDL's JNI functions are registered in `JNI_OnLoad` (`RegisterNatives`), the SDL activity
  * calls `SDL_main` after loading the library. Python symbols stay visible for extension
- * modules. */
+ * modules, `blender_android_*` functions are called by Python scripts (`ctypes`). */
 {
 global:
   JNI_OnLoad;
@@ -10,6 +10,7 @@ global:
   SDL_main;
   Py*;
   _Py*;
+  blender_android_*;
 local:
   *;
 };

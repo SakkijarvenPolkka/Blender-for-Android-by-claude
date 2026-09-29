@@ -134,6 +134,10 @@ GHOST_SystemAndroid::GHOST_SystemAndroid() : GHOST_System()
   SDL_SetHint(SDL_HINT_PEN_TOUCH_EVENTS, "0");
   /* "Back" is mapped to escape instead of closing the activity. */
   SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+  /* Keep running in the background (renders, requests to the MCP server add-on): nothing is
+   * presented without a surface, see #GHOST_WindowAndroid::setSurfaceAvailable. The application
+   * keeps the process alive with a foreground service when needed (see `BlenderActivity`). */
+  SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
   /* Blender draws the IME composition string itself. */
   SDL_SetHint(SDL_HINT_IME_IMPLEMENTED_UI, "composition");
   if (std::getenv("BLENDER_ANDROID_ORIENTATIONS") == nullptr) {
@@ -606,8 +610,7 @@ void GHOST_SystemAndroid::processLifecycleEvent(const SDL_Event &event)
   switch (event.type) {
     case SDL_EVENT_WILL_ENTER_BACKGROUND: {
       CLOG_INFO(&LOG, "Entering background");
-      /* SDL blocks when events are polled the next time, until then nothing can be presented:
-       * the surface is destroyed any time from now on. */
+      /* Nothing can be presented anymore: the surface is destroyed any time from now on. */
       if (window_) {
         window_->setSurfaceAvailable(false);
       }

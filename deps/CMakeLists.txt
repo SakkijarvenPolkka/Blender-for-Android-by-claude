@@ -36,6 +36,7 @@ include(cmake/options.cmake)
 include(cmake/libs_python.cmake)
 include(cmake/libs_core.cmake)
 include(cmake/libs_gpu.cmake)
+include(cmake/libs_python_packages.cmake)
 
 add_dependencies(external_shaderc external_python_host)
 

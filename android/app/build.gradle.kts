@@ -56,8 +56,10 @@ android {
 
     packaging {
         jniLibs {
-            // Load `libblender.so` directly from the APK (page aligned, uncompressed).
-            useLegacyPackaging = false
+            // Extract the native libraries when installing: the Python interpreter executable
+            // (`libblender_python.so`) must be a file to be executed. Also makes the APK smaller
+            // (compressed libraries).
+            useLegacyPackaging = true
         }
     }
 

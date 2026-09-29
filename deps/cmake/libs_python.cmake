@@ -2,10 +2,10 @@
 #
 # CPython for Android (officially supported since Python 3.13, PEP 738).
 #
-# Android apps targeting API 29+ may not `dlopen()` libraries from their
-# writable data directory (W^X SELinux policy), so all standard library
-# extension modules are linked statically into `libpython3.x.a`
-# (`MODULE_BUILDTYPE=static`), which in turn is linked into `libblender.so`.
+# The standard library extension modules are linked statically into `libpython3.x.a`
+# (`MODULE_BUILDTYPE=static`), which in turn is linked into `libblender.so`: no separate
+# libraries to package & load. Extension modules of bundled packages (NumPy) are shared
+# libraries, see `libs_python_packages.cmake`.
 
 # ---------------------------------------------------------------------------
 # Python's own dependencies

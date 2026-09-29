@@ -20,6 +20,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <android/log.h>
+#include <jni.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -83,6 +84,38 @@ static void log_redirect_init()
   if (pthread_create(&thread, nullptr, log_thread_fn, nullptr) == 0) {
     pthread_detach(thread);
   }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Functions for Python Scripts
+ *
+ * Called through `ctypes` (e.g. `ctypes.pythonapi.blender_android_keep_alive`).
+ * \{ */
+
+/**
+ * Keep Blender running while it's in the background (a foreground service with a notification),
+ * otherwise Android can freeze or stop the application.
+ * The requests are counted: every enable must be matched by a disable.
+ */
+extern "C" JNIEXPORT void blender_android_keep_alive(const int enable)
+{
+  JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+  if (env == nullptr || activity == nullptr) {
+    return;
+  }
+  jclass activity_class = env->GetObjectClass(activity);
+  jmethodID method = env->GetMethodID(activity_class, "setKeepAlive", "(Z)V");
+  if (method != nullptr) {
+    env->CallVoidMethod(activity, method, jboolean(enable != 0));
+  }
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+  }
+  env->DeleteLocalRef(activity_class);
+  env->DeleteLocalRef(activity);
 }
 
 /** \} */

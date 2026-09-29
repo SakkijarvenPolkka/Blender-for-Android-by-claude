@@ -23,6 +23,9 @@ import java.io.File;
 final class BlenderPaths {
     private static final String TAG = "BlenderPaths";
 
+    /** Python version bundled with Blender (see `deps/`). */
+    private static final String PYTHON_VERSION = "3.13";
+
     private BlenderPaths() {}
 
     /** Root of the extracted data, contains the `<major>.<minor>` directory. */
@@ -72,7 +75,23 @@ final class BlenderPaths {
         setenv("LANG", "C.UTF-8");
         setenv("PYTHONDONTWRITEBYTECODE", null);
 
-        // OpenSSL (used by Python's `ssl` module) needs the system certificates.
+        // Python interpreter executable for sub-processes (`sys.executable`), packaged with the
+        // native libraries: applications can only execute files from that directory.
+        String nativeLibDir = context.getApplicationInfo().nativeLibraryDir;
+        File python = new File(nativeLibDir, "libblender_python.so");
+        if (python.isFile()) {
+            setenv("BLENDER_ANDROID_PYTHON", python.getAbsolutePath());
+        }
+        // Libraries of executed programs (the Python interpreter links `libblender.so`).
+        setenv("LD_LIBRARY_PATH", nativeLibDir);
+
+        // Certificates for Python's `ssl` module (OpenSSL): the bundle of the `certifi` package,
+        // OpenSSL can't use Android's certificate store directly.
+        File certifi = new File(system, "python/lib/python" + PYTHON_VERSION
+                                + "/site-packages/certifi/cacert.pem");
+        if (certifi.isFile()) {
+            setenv("SSL_CERT_FILE", certifi.getAbsolutePath());
+        }
         String[] certDirs = {
             "/apex/com.android.conscrypt/cacerts",
             "/system/etc/security/cacerts",

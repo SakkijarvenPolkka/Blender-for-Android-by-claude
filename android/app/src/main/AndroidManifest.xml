@@ -28,6 +28,10 @@
         android:maxSdkVersion="32" />
     <!-- SDL: game controllers & haptics. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Keep running in the background while an AI assistant uses Blender (MCP server). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -97,5 +101,14 @@
                 android:minWidth="640dp"
                 android:minHeight="400dp" />
         </activity>
+
+        <service
+            android:name=".BackgroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local server letting AI assistants use Blender (Model Context Protocol) while another app is in the foreground" />
+        </service>
     </application>
 </manifest>

@@ -60,9 +60,25 @@ def main():
     check(json.loads(json.dumps({"a": [1, 2]}))["a"][1] == 2, "json")
     check(str(decimal.Decimal("1.1") + decimal.Decimal("2.2")) == "3.3", "decimal")
     check(ctypes.sizeof(ctypes.c_void_p) == 8, "ctypes (libffi)")
+    check(ctypes.pythonapi.Py_IsInitialized() == 1, "ctypes.pythonapi (libblender.so)")
+
+    # Bundled packages.
+    import numpy
+    import requests
+    import certifi
+    import cattrs  # noqa: F401
+    import aud  # Audio, built with NumPy.
+    check(abs(numpy.linalg.det(numpy.diag([2.0, 3.0])) - 6.0) < 1e-9, "numpy " + numpy.__version__)
+    check(requests.__version__ and certifi.where().endswith("cacert.pem"), "requests " + requests.__version__)
+    check(hasattr(aud, "Sound"), "aud")
 
     scene = bpy.context.scene
     cube = bpy.data.objects["Cube"]
+
+    # NumPy with Blender data.
+    coords = numpy.empty(len(cube.data.vertices) * 3, dtype=numpy.float32)
+    cube.data.vertices.foreach_get("co", coords)
+    check(numpy.allclose(numpy.abs(coords), 1.0), "foreach_get into a NumPy array")
 
     # OpenSubdiv.
     subsurf = cube.modifiers.new("Subdivision", 'SUBSURF')
@@ -105,6 +121,9 @@ def main():
         ("OBJ", bpy.ops.wm.obj_export, "obj"),
         ("PLY", bpy.ops.wm.ply_export, "ply"),
         ("STL", bpy.ops.wm.stl_export, "stl"),
+        # Python add-ons using NumPy.
+        ("glTF", lambda filepath: bpy.ops.export_scene.gltf(filepath=filepath, export_format='GLB'), "glb"),
+        ("FBX", bpy.ops.export_scene.fbx, "fbx"),
     ):
         path = os.path.join(output_dir, "smoke_test." + extension)
         operator(filepath=path)

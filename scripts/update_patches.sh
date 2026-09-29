@@ -18,7 +18,8 @@ log "Wrote ${patch_file} ($(grep -c '^diff --git' "${patch_file}") files)"
 
 rm -rf "${REPO_DIR}/blender/overlay"
 mkdir -p "${REPO_DIR}/blender/overlay"
-git -C "${BLENDER_SRC_DIR}" ls-files --others --exclude-standard | while read -r file; do
+git -C "${BLENDER_SRC_DIR}" ls-files --others --exclude-standard \
+    -x '__pycache__' -x '*.pyc' | while read -r file; do
   case "${file}" in
     .android_port_applied) continue ;;
   esac

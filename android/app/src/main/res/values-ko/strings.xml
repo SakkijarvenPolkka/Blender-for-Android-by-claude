@@ -24,4 +24,7 @@
     <string name="view_ortho">원근 / 직교 전환</string>
     <string name="view_selected">선택 항목 보기</string>
     <string name="view_all">전체 보기</string>
+    <string name="background_channel">백그라운드 실행</string>
+    <string name="background_title">Blender가 백그라운드에서 실행 중입니다</string>
+    <string name="background_text">AI 어시스턴트가 Blender를 사용할 수 있습니다(MCP 서버). 탭하면 Blender로 돌아갑니다.</string>
 </resources>

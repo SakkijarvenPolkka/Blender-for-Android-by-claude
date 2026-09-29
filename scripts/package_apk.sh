@@ -18,6 +18,13 @@ log "Stripping libblender.so"
 "${ANDROID_TOOLCHAIN_DIR}/bin/llvm-strip" --strip-unneeded \
   -o "${APK_WORK_DIR}/jniLibs/${ANDROID_ABI}/libblender.so" "${LIB}"
 
+# Python interpreter executable (`sys.executable`), see `android/native/blender_python.c`.
+log "Building the Python interpreter executable"
+"${ANDROID_TOOLCHAIN_DIR}/bin/${ANDROID_TRIPLE}${ANDROID_API}-clang" -O2 -s -pie \
+  -o "${APK_WORK_DIR}/jniLibs/${ANDROID_ABI}/libblender_python.so" \
+  "${REPO_DIR}/android/native/blender_python.c" -I"${LIBDIR}/include/python3.13" \
+  -L"${APK_WORK_DIR}/jniLibs/${ANDROID_ABI}" -lblender '-Wl,-rpath,$ORIGIN'
+
 log "Creating data archive"
 "${PYTHON:-python3}" - "${BLENDER_INSTALL_DIR}" "${BLENDER_VERSION_SHORT}" \
   "${APK_WORK_DIR}/assets/blender_data.zip" <<'EOF'

@@ -793,11 +793,105 @@ index c563730..9e221ba 100644
  
      for asset_lib in bpy.context.preferences.filepaths.asset_libraries:
          if not asset_lib.enabled:
+diff --git a/scripts/modules/_bpy_internal/http/downloader.py b/scripts/modules/_bpy_internal/http/downloader.py
+index 5321da1..6d30f48 100644
+--- a/scripts/modules/_bpy_internal/http/downloader.py
++++ b/scripts/modules/_bpy_internal/http/downloader.py
+@@ -46,7 +46,12 @@ from typing import Protocol, TypeAlias, Any, override
+ # mypy   : Variable "multiprocessing.Event" is not valid as a type
+ #          note: See https://mypy.readthedocs.io/en/stable/common_issues.html#variables-vs-type-aliases
+ # Pylance: Variable not allowed in type expression
+-from multiprocessing.synchronize import Event as EventClass
++try:
++    from multiprocessing.synchronize import Event as EventClass
++except ImportError:
++    # No process synchronization primitives (e.g. Android), see `_ThreadContext`.
++    import threading
++    EventClass = threading.Event  # type: ignore[misc,assignment]
+ 
+ import cattrs
+ import cattrs.preconf.json
+@@ -414,7 +419,41 @@ class ConditionalDownloader:
+ #
+ # So I (Sybren) figure it's better to test with the 'spawn' method,
+ # which is also the current default on Windows and macOS.
+-_mp_context = multiprocessing.get_context(method='spawn')
++
++
++class _ThreadContext:
++    """Stand-in for a `multiprocessing` context, running the downloader in a thread.
++
++    Used on platforms without process synchronization primitives (`sem_open`, e.g. Android),
++    where `multiprocessing.Event` can't be used.
++    """
++
++    @staticmethod
++    def Event() -> EventClass:
++        import threading
++        return threading.Event()
++
++    @staticmethod
++    def Pipe(duplex: bool = True) -> tuple[Any, Any]:
++        import multiprocessing.dummy
++        return multiprocessing.dummy.Pipe(duplex)
++
++    @staticmethod
++    def Process(*, name: str, target: Callable[..., None], args: tuple[Any, ...], daemon: bool) -> Any:
++        import threading
++        return threading.Thread(name=name, target=target, args=args, daemon=daemon)
++
++
++def _mp_context_get() -> Any:
++    try:
++        import _multiprocessing  # noqa: F401
++        from multiprocessing import synchronize  # noqa: F401
++    except ImportError:
++        return _ThreadContext()
++    return multiprocessing.get_context(method='spawn')
++
++
++_mp_context = _mp_context_get()
+ 
+ 
+ @dataclasses.dataclass
+diff --git a/source/blender/blenkernel/intern/appdir.cc b/source/blender/blenkernel/intern/appdir.cc
+index a2c9056..127de8f 100644
+--- a/source/blender/blenkernel/intern/appdir.cc
++++ b/source/blender/blenkernel/intern/appdir.cc
+@@ -1019,6 +1019,17 @@ bool BKE_appdir_program_python_search(char *program_filepath,
+ {
+   ASSERT_IS_INIT();
+ 
++#ifdef __ANDROID__
++  /* Applications can only execute files from their native library directory, the Python
++   * interpreter is packaged there (set by the application, see the Android app project). */
++  if (const char *android_python = BLI_getenv("BLENDER_ANDROID_PYTHON")) {
++    if (BLI_exists(android_python)) {
++      BLI_strncpy(program_filepath, android_python, program_filepath_maxncpy);
++      return true;
++    }
++  }
++#endif
++
+ #ifdef PYTHON_EXECUTABLE_NAME
+   /* Passed in from the build-systems 'PYTHON_EXECUTABLE'. */
+   const char *python_build_def = STRINGIFY(PYTHON_EXECUTABLE_NAME);
 diff --git a/source/blender/blenkernel/intern/blendfile.cc b/source/blender/blenkernel/intern/blendfile.cc
-index d2eb290..f5746f6 100644
+index d2eb290..f09db58 100644
 --- a/source/blender/blenkernel/intern/blendfile.cc
 +++ b/source/blender/blenkernel/intern/blendfile.cc
-@@ -1558,6 +1558,18 @@ UserDef *BKE_blendfile_userdef_from_defaults()
+@@ -1534,6 +1534,10 @@ UserDef *BKE_blendfile_userdef_from_defaults()
+         "cycles",
+         "pose_library",
+         "bl_pkg",
++#ifdef __ANDROID__
++        /* Remote control by AI assistants (the server is started by the user). */
++        "mcp_server",
++#endif
+     };
+     for (int i = 0; i < ARRAY_SIZE(addons); i++) {
+       bAddon *addon = BKE_addon_new();
+@@ -1558,6 +1562,15 @@ UserDef *BKE_blendfile_userdef_from_defaults()
    userdef->flag &= ~USER_SCRIPT_AUTOEXEC_DISABLE;
  #endif
  
@@ -808,9 +902,6 @@ index d2eb290..f5746f6 100644
 +  userdef->preferences_display_type = USER_TEMP_SPACE_DISPLAY_FULLSCREEN;
 +  /* Applications can be terminated at any time while in the background, save more often. */
 +  userdef->savetime = 1;
-+  /* Downloading assets relies on Python's `multiprocessing` (not available on Android),
-+   * use the Essentials assets bundled with Blender. */
-+  userdef->asset_flag &= ~USER_ASSETS_USE_ONLINE_ESSENTIALS;
 +#endif
 +
    /* System-specific fonts directory.
@@ -1117,7 +1208,7 @@ index 4c0aa2c..9077d57 100644
    if (UNLIKELY(g_system == nullptr)) {
      /* GHOST will have reported the back-ends that failed to load. */
 diff --git a/source/creator/CMakeLists.txt b/source/creator/CMakeLists.txt
-index 985b969..3c1ee95 100644
+index 985b969..d379b52 100644
 --- a/source/creator/CMakeLists.txt
 +++ b/source/creator/CMakeLists.txt
 @@ -149,6 +149,18 @@ set(SRC
@@ -1139,24 +1230,31 @@ index 985b969..3c1ee95 100644
  if(CMAKE_GENERATOR MATCHES "^Visual Studio.+")
    # This helps visual studio find the debugger visualizers
    list(APPEND SRC ${CMAKE_SOURCE_DIR}/tools/utils_ide/natvis/Blender.natvis)
-@@ -334,6 +346,9 @@ if(WITH_PYTHON_MODULE)
+@@ -334,6 +346,16 @@ if(WITH_PYTHON_MODULE)
      )
    endif()
  
 +elseif(ANDROID)
 +  # `libblender.so`, loaded by the Java activity.
 +  add_library(blender SHARED ${SRC})
++  if(WITH_PYTHON)
++    # All of Python: extension modules (NumPy ...) and the Python executable (see the Android
++    # app project) use parts of Python's API Blender itself doesn't use.
++    target_link_options(blender PRIVATE
++      "LINKER:--whole-archive" "${PYTHON_LIBRARY}" "LINKER:--no-whole-archive"
++    )
++  endif()
  else()
    add_executable(blender ${EXETYPE} ${SRC})
    if(WITH_CPU_CHECK)
-@@ -750,7 +765,38 @@ endfunction()
+@@ -750,7 +772,39 @@ endfunction()
  # -----------------------------------------------------------------------------
  # Install Targets (Platform Specific)
  
 -if(UNIX AND NOT APPLE)
 +if(ANDROID)
 +  # `libblender.so` is packaged in the APK, the data files and Python's standard
-+  # library are packaged as assets that are extracted on first start.
++  # library (with the bundled packages) are packaged as assets that are extracted on first start.
 +  install(
 +    TARGETS blender
 +    LIBRARY DESTINATION "lib"
@@ -1169,7 +1267,8 @@ index 985b969..3c1ee95 100644
 +      PATTERN "__pycache__" EXCLUDE               # * any cache *
 +      PATTERN "config-${PYTHON_VERSION}*" EXCLUDE # static lib & makefiles
 +      PATTERN "lib2to3" EXCLUDE                   # ./lib2to3
-+      PATTERN "site-packages/*" EXCLUDE           # ./site-packages/*
++      # ./site-packages: packages bundled with Blender (NumPy, requests ...), see `deps/`.
++      PATTERN "site-packages/bin" EXCLUDE         # ./site-packages/bin (scripts)
 +      PATTERN "tkinter" EXCLUDE                   # ./tkinter
 +      PATTERN "idlelib" EXCLUDE                   # ./idlelib
 +      PATTERN "test" EXCLUDE                      # ./test

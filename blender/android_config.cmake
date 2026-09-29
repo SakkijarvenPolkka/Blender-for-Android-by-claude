@@ -31,7 +31,9 @@ set(WITH_CODEC_SNDFILE OFF CACHE BOOL "" FORCE)
 # Python.
 set(WITH_PYTHON ON CACHE BOOL "" FORCE)
 set(WITH_PYTHON_INSTALL ON CACHE BOOL "" FORCE)
-set(WITH_PYTHON_NUMPY OFF CACHE BOOL "" FORCE)
+# NumPy and the other bundled packages are built with the dependencies (`deps/`) into
+# `site-packages`, which is installed as a whole (see `source/creator/CMakeLists.txt`).
+set(WITH_PYTHON_NUMPY ON CACHE BOOL "" FORCE)
 set(WITH_PYTHON_INSTALL_NUMPY OFF CACHE BOOL "" FORCE)
 set(WITH_PYTHON_INSTALL_REQUESTS OFF CACHE BOOL "" FORCE)
 set(WITH_PYTHON_INSTALL_ZSTANDARD OFF CACHE BOOL "" FORCE)

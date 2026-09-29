@@ -21,7 +21,9 @@ See "Build" below.*
 | 의존성 크로스 컴파일 (Python 3.13, OIIO, OCIO, OpenEXR, TBB, shaderc, SDL3, OpenSubdiv, Manifold, GMP, FFTW …) | ✅ 빌드 확인 |
 | Blender 5.2.2 → `libblender.so` (arm64-v8a, API 31, 16KB 페이지 정렬) | ✅ 빌드·링크 확인 |
 | Android bionic 위에서 백그라운드 모드 실행 (QEMU, 아래 "검증") | ✅ 스모크 테스트 통과 |
-| APK 패키징 (Gradle, 데이터 자동 설치, 터치 툴바) | ✅ 약 170MB APK 생성 확인 |
+| NumPy 2.3, requests 등 Python 패키지, 확장(Extensions) 온라인 설치 | ✅ QEMU에서 확인 |
+| Claude 연동 (MCP 서버: Claude Code / Claude 앱에서 Blender 제어) | ✅ QEMU에서 종단 간 테스트 통과 |
+| APK 패키징 (Gradle, 데이터 자동 설치, 터치 툴바) | ✅ 약 115MB APK 생성 확인 |
 | 실제 기기(Galaxy S22)에서 UI 실행 (SDL3 창, Vulkan, 터치 입력) | ⚠️ **실기기 테스트 전** — GPU 드라이버 호환성은 기기에서 확인 필요 |
 
 ### 검증
@@ -35,7 +37,11 @@ CI에서도 매 빌드마다 실행됩니다.
 - 스모크 테스트 (`tests/qemu/smoke_test.py`, 백그라운드 모드): Python 표준 라이브러리 확장 모듈
   (`ssl`/OpenSSL 3.5, `hashlib`, `sqlite3`, `lzma`, `bz2`, `zlib`, `decimal`, `ctypes`), OpenSubdiv 서브디비전,
   Boolean(Manifold/Exact), .blend 저장·불러오기, OBJ/PLY/STL 내보내기, Cycles CPU 렌더링 → PNG/EXR/JPEG/WebP,
-  OpenImageIO 이미지 읽기, OpenColorIO(AgX) — **모두 통과**
+  OpenImageIO 이미지 읽기, OpenColorIO(AgX), NumPy(`foreach_get`), glTF·FBX 내보내기 — **모두 통과**
+- Python 실행 파일(`sys.executable`, 격리 모드 `-I`): 표준 라이브러리·NumPy·requests 로드, 확장 플랫폼 CLI로
+  extensions.blender.org 목록 동기화(HTTPS) 확인
+- MCP 서버 종단 간 테스트 (`tests/qemu/mcp_test.py`): 최신(2026-07-28)·구버전(2025-06-18) 프로토콜,
+  `execute_python`(NumPy로 메시 생성), 씬·오브젝트 정보, Cycles 렌더 이미지 반환, .blend 저장 — **통과**
 
 GPU(Vulkan) 경로와 터치·펜 입력은 에뮬레이션으로 확인할 수 없어 실기기 테스트가 필요합니다.
 
@@ -45,19 +51,21 @@ GPU(Vulkan) 경로와 터치·펜 입력은 에뮬레이션으로 확인할 수 
 
 - **UI / 3D 뷰포트**: Vulkan 백엔드 (Workbench, EEVEE)
 - **렌더링**: Cycles (CPU, ARM NEON), EEVEE
-- **Python**: CPython 3.13 (표준 라이브러리 + `ssl`, `sqlite3`, `ctypes` 등 확장 모듈 정적 링크)
-- **입출력**: .blend, OBJ, PLY, STL, FBX(가져오기), SVG / 이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
+- **Python**: CPython 3.13 (표준 라이브러리 + `ssl`, `sqlite3`, `ctypes` 등), 공식 Blender와 같은 번들 패키지:
+  **NumPy 2.3**, requests, certifi, cattrs, autopep8 등 / `aud`(오디오) 모듈
+- **확장(Extensions)**: extensions.blender.org에서 애드온 검색·설치 (환경설정 → 시스템 → 네트워크에서 온라인 접근 허용),
+  원격 에셋 라이브러리·온라인 Essentials
+- **Claude 연동**: 내장 MCP 서버 애드온 — Claude Code나 Claude 앱이 Blender Python API를 사용 (아래 참고)
+- **입출력**: .blend, OBJ, PLY, STL, FBX, glTF/GLB, SVG / 이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
 - **모델링**: OpenSubdiv, Boolean(Manifold/Exact), Remesh, QuadriFlow, 물리(Bullet), 유체(Mantaflow), 오션
 - **오디오**: SDL3 (AAudio / OpenSL ES)
 - **파일 열기**: 파일 관리자에서 `.blend` 파일 열기 지원
 
 ### 아직 지원하지 않는 기능
 
-OpenVDB(볼륨), Alembic, USD, MaterialX, FFmpeg(동영상), NumPy(glTF 가져오기·내보내기, FBX 내보내기 등 NumPy를
-쓰는 애드온 포함), OpenImageDenoise, Embree, 모션 트래킹(libmv),
-OpenXR, Cycles GPU 렌더링, 여러 개의 창(환경설정·파일 브라우저·렌더 결과는 메인 창 안에서 열리도록 기본 설정됨),
-온라인 확장(Extensions)·원격 에셋 라이브러리 다운로드(Android용 Python에는 `multiprocessing`이 없고 별도 Python
-프로세스를 실행할 수 없음 — 내장 Essentials 에셋은 사용 가능).
+OpenVDB(볼륨), Alembic, USD, MaterialX, FFmpeg(동영상), OpenImageDenoise, Embree, 모션 트래킹(libmv) — 순차적으로
+추가 중입니다. OpenXR, Cycles GPU 렌더링(모바일 GPU용 Cycles 백엔드 없음), 여러 개의 창(환경설정·파일 브라우저·렌더
+결과는 메인 창 안에서 열림), 네이티브 라이브러리(glibc용 wheel)를 포함한 일부 확장은 지원하지 않습니다.
 
 ---
 
@@ -79,10 +87,37 @@ OpenXR, Cycles GPU 렌더링, 여러 개의 창(환경설정·파일 브라우�
 화면 위쪽의 **떠 있는 툴바**: ⌨ 가상 키보드(단축키 입력용), Esc, Tab, Ctrl/Shift/Alt(토글), 실행 취소/다시 실행,
 Del, 뷰(앞/옆/위/카메라/원근 전환/선택 항목 보기). 왼쪽 ☰ 손잡이로 이동(드래그)하거나 접을(탭) 수 있습니다.
 
-- 첫 실행 시 Blender 데이터(약 160MB)를 내부 저장소에 설치합니다 (업데이트 후에도 한 번).
+- 첫 실행 시 Blender 데이터(약 190MB)를 내부 저장소에 설치합니다 (업데이트 후에도 한 번).
 - "모든 파일 접근" 권한을 허용하면 기기의 모든 폴더에서 .blend 파일을 열고 저장할 수 있습니다.
 - UI 크기는 Blender의 *환경설정 → 인터페이스 → 해상도 배율*로 조절합니다.
 - 앱이 백그라운드로 전환될 때 자동 저장(복구 파일)을 기록합니다. *파일 → 복구 → 자동 저장*으로 복원할 수 있습니다.
+
+---
+
+## Claude로 Blender 사용하기 (MCP)
+
+Blender에 내장된 **MCP 서버** 애드온(Model Context Protocol)을 켜면 Claude Code나 Claude 앱이 Blender의 Python
+API로 모델링·머티리얼·애니메이션·렌더링을 직접 수행합니다.
+
+1. 3D 뷰포트 사이드바(`N`)의 **MCP** 탭(또는 환경설정 → 애드온 → MCP Server)에서 **Start MCP Server**.
+   처음 시작할 때 토큰(비밀 키)이 만들어집니다. **토큰을 가진 사람은 Blender에서 코드를 실행할 수 있으니
+   공유하지 마세요.**
+2. 서버가 실행되는 동안 Blender는 백그라운드에서도 계속 동작합니다(알림에 "백그라운드에서 실행 중" 표시).
+   같은 휴대폰에서 Claude 앱으로 전환해도 됩니다.
+
+연결 방법:
+
+| 클라이언트 | 방법 |
+| --- | --- |
+| Claude Code (같은 기기, 예: Termux) | **Copy Claude Code Command** 버튼으로 복사한 명령 실행:<br>`claude mcp add --transport http blender http://127.0.0.1:8765/mcp --header "Authorization: Bearer <토큰>"` |
+| Claude Code (PC, USB 연결) | `adb forward tcp:8765 tcp:8765` 후 위와 같은 명령 |
+| Claude Code (PC, 같은 Wi-Fi) | **Allow Network Access**를 켜고 패널에 표시된 휴대폰 IP 주소로 연결 |
+| Claude 앱 (모바일·웹, 사용자 지정 커넥터) | 커넥터에는 인터넷에서 접근 가능한 HTTPS 주소가 필요합니다. 휴대폰에서 터널을 실행하고 (예: Termux에서 `cloudflared tunnel --url http://127.0.0.1:8765`), **Copy URL with Token**으로 복사한 주소의 `http://127.0.0.1:8765` 부분을 터널 주소로 바꾼 `https://<터널 주소>/mcp/<토큰>`을 커넥터로 추가 |
+
+제공 도구: `execute_python`(bpy·mathutils·NumPy, 변수 유지), `get_scene_info`, `get_object_info`,
+`get_viewport_screenshot`(뷰포트 화면 이미지), `render_image`(렌더 결과 이미지), `save_blend_file`.
+PC나 서버의 Blender에서도 같은 애드온을 쓸 수 있습니다:
+`blender --background --python-expr "import mcp_server; mcp_server.serve_forever(port=8765)"`.
 
 ---
 
@@ -155,8 +190,12 @@ scripts/                     빌드 스크립트
 - **Vulkan** (`GHOST_ContextVK.cc`): `VK_KHR_android_surface`, 앱 일시정지/재개 시 Surface 재생성,
   화면 회전(preTransform) 처리, 모바일 GPU에 없는 기능(예: Qualcomm 드라이버의 `VK_EXT_provoking_vertex`)을
   필수에서 선택으로 완화했습니다.
-- **Python**: Android에서는 앱 데이터 폴더의 `.so`를 로드할 수 없으므로(W^X 정책) 표준 라이브러리 확장 모듈을
-  모두 `libpython3.13.a`에 정적으로 포함했습니다 (`MODULE_BUILDTYPE=static`). stdout/stderr는 logcat으로 전달됩니다.
+- **Python**: 표준 라이브러리 확장 모듈은 `libpython3.13.a`에 정적으로 포함하고(`MODULE_BUILDTYPE=static`) Python
+  전체를 `libblender.so`에 링크합니다. NumPy 같은 패키지의 확장 모듈은 CPython의 Android 빌드처럼 공유 라이브러리로
+  데이터와 함께 풀리며, Python API를 제공하는 `libblender.so`에 의존하도록 빌드합니다(`deps/cmake/cross_python.cmake`).
+  Android 앱은 네이티브 라이브러리 폴더의 파일만 실행할 수 있으므로 Python 실행 파일(`sys.executable`, 확장
+  플랫폼 등 하위 프로세스용)을 `libblender_python.so`라는 이름으로 함께 패키징합니다. stdout/stderr는 logcat으로
+  전달됩니다.
 - **데이터 파일**: `datafiles`, `scripts`, Python 표준 라이브러리를 `blender_data.zip`으로 APK에 넣고
   첫 실행 시 내부 저장소에 풀어 `BLENDER_SYSTEM_RESOURCES`로 지정합니다.
 

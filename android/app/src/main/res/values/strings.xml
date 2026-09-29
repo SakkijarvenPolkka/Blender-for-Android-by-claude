@@ -24,4 +24,7 @@
     <string name="view_ortho">Perspective / Orthographic</string>
     <string name="view_selected">Frame Selected</string>
     <string name="view_all">Frame All</string>
+    <string name="background_channel">Running in the background</string>
+    <string name="background_title">Blender is running in the background</string>
+    <string name="background_text">An AI assistant can use Blender (MCP server). Tap to return to Blender.</string>
 </resources>

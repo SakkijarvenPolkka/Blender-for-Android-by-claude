@@ -49,3 +49,34 @@ run_blender --background --factory-startup -noaudio \
   --python "${REPO_DIR}/tests/qemu/smoke_test.py" -- "${TEST_DIR}/output" 2>&1 | tee "${TEST_DIR}/smoke_test.log"
 grep -q "ALL TESTS PASSED" "${TEST_DIR}/smoke_test.log" || die "Smoke test failed"
 log "Smoke test passed, output in ${TEST_DIR}/output"
+
+# Python interpreter executable (`sys.executable`), packaged like in the APK.
+log "Python executable (isolated mode, as used by the extensions platform)"
+PYTHON_EXE="${TEST_DIR}/libblender_python.so"
+"${ANDROID_TOOLCHAIN_DIR}/bin/${ANDROID_TRIPLE}${ANDROID_API}-clang" -O2 -pie -o "${PYTHON_EXE}" \
+  "${REPO_DIR}/android/native/blender_python.c" -I"${LIBDIR}/include/python3.13" \
+  -L"$(dirname "${LIB}")" -lblender '-Wl,-rpath,$ORIGIN'
+LD_LIBRARY_PATH="$(dirname "${LIB}")" "${QEMU_AARCH64}" -L "${ANDROID_ROOT}" "${PYTHON_EXE}" -I -c \
+  "import sys, ssl, numpy, requests; assert sys.executable.endswith('libblender_python.so'); \
+print('python', sys.version.split()[0], ssl.OPENSSL_VERSION, 'numpy', numpy.__version__)" \
+  || die "Python executable test failed"
+
+# MCP server (`mcp_server` add-on): Blender serves in the background, the test acts as client.
+log "MCP server"
+MCP_PORT="${MCP_PORT:-18765}"
+export BLENDER_MCP_TOKEN="test-$$-${RANDOM}"
+"${QEMU_AARCH64}" -L "${ANDROID_ROOT}" "${RUNNER}" "${LIB}" --background --factory-startup -noaudio \
+  --python-expr "import addon_utils; addon_utils.enable('mcp_server'); import mcp_server; \
+mcp_server.serve_forever(port=${MCP_PORT})" > "${TEST_DIR}/mcp_server.log" 2>&1 &
+MCP_PID=$!
+trap 'kill ${MCP_PID} 2>/dev/null || true' EXIT
+for _ in $(seq 1 120); do
+  grep -q "MCP end-point" "${TEST_DIR}/mcp_server.log" 2>/dev/null && break
+  kill -0 "${MCP_PID}" 2>/dev/null || { cat "${TEST_DIR}/mcp_server.log"; die "MCP server exited"; }
+  sleep 1
+done
+"${PYTHON:-python3}" "${REPO_DIR}/tests/qemu/mcp_test.py" \
+  "http://127.0.0.1:${MCP_PORT}/mcp" "${BLENDER_MCP_TOKEN}" "${TEST_DIR}/output" \
+  || { tail -30 "${TEST_DIR}/mcp_server.log"; die "MCP test failed"; }
+kill "${MCP_PID}" 2>/dev/null || true
+log "All tests passed"
