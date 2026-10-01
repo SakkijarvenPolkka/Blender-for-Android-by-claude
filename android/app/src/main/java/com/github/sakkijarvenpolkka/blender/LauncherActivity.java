@@ -55,6 +55,8 @@ public class LauncherActivity extends Activity {
     private ProgressBar progress;
     /** `.blend` file to open (copied from a content URI when needed). */
     private String blendFile;
+    /** The "Don't keep activities" warning opened the developer options, check again on return. */
+    private boolean openedDeveloperOptions;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -170,6 +172,15 @@ public class LauncherActivity extends Activity {
      * The developer option "Don't keep activities" destroys Blender's activity as soon as it goes
      * to the background, which ends Blender (SDL can't run without its activity).
      */
+    @Override
+    protected void onRestart() {
+        super.onRestart();
+        if (openedDeveloperOptions) {
+            openedDeveloperOptions = false;
+            checkDontKeepActivities();
+        }
+    }
+
     private void checkDontKeepActivities() {
         if (Settings.Global.getInt(getContentResolver(), Settings.Global.ALWAYS_FINISH_ACTIVITIES, 0) == 0) {
             askStorageAndStart();
@@ -179,12 +190,14 @@ public class LauncherActivity extends Activity {
             .setTitle(R.string.dont_keep_title)
             .setMessage(R.string.dont_keep_message)
             .setPositiveButton(R.string.dont_keep_settings, (dialog, which) -> {
+                // Blender starts once the user is back (checked again), not on top of the settings.
                 try {
                     startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+                    openedDeveloperOptions = true;
                 } catch (Exception e) {
                     Log.w(TAG, "Unable to open the developer options", e);
+                    askStorageAndStart();
                 }
-                askStorageAndStart();
             })
             .setNegativeButton(R.string.dont_keep_continue, (dialog, which) -> askStorageAndStart())
             .setCancelable(false)
@@ -228,7 +241,12 @@ public class LauncherActivity extends Activity {
                 next.run();
                 return;
         }
-        File report = writeExitReport(info, reason);
+        File report = null;
+        try {
+            report = writeExitReport(info, reason);
+        } catch (RuntimeException | LinkageError e) {
+            Log.w(TAG, "Unable to write the exit report", e);
+        }
         String when = DateFormat.getDateTimeInstance().format(new Date(info.getTimestamp()));
         new AlertDialog.Builder(this)
             .setTitle(R.string.exit_title)
@@ -254,6 +272,15 @@ public class LauncherActivity extends Activity {
         }
     }
 
+    /** `InputStream.transferTo()` needs API 33. */
+    private static void copyStream(InputStream in, OutputStream out) throws IOException {
+        byte[] buffer = new byte[64 * 1024];
+        int count;
+        while ((count = in.read(buffer)) != -1) {
+            out.write(buffer, 0, count);
+        }
+    }
+
     /** Writes the exit information (and the native crash report) next to the user's files. */
     private File writeExitReport(ApplicationExitInfo info, String reason) {
         File dir = getExternalFilesDir(null);
@@ -273,13 +300,13 @@ public class LauncherActivity extends Activity {
                     if (info.getReason() == ApplicationExitInfo.REASON_CRASH_NATIVE) {
                         // A tombstone (protobuf, see Android's `tombstone.proto`).
                         try (OutputStream tombstone = new FileOutputStream(new File(dir, "last_exit_tombstone.pb"))) {
-                            trace.transferTo(tombstone);
+                            copyStream(trace, tombstone);
                         }
                         out.write("\nNative crash report: last_exit_tombstone.pb\n".getBytes(
                             java.nio.charset.StandardCharsets.UTF_8));
                     } else {
                         out.write("\nTrace:\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                        trace.transferTo(out);
+                        copyStream(trace, out);
                     }
                 }
             }
@@ -379,7 +406,7 @@ public class LauncherActivity extends Activity {
             if (in == null) {
                 return null;
             }
-            in.transferTo(os);
+            copyStream(in, os);
             return out.getAbsolutePath();
         } catch (IOException e) {
             Log.e(TAG, "Unable to copy " + uri, e);

@@ -86,7 +86,7 @@
 
         <activity
             android:name=".BlenderActivity"
-            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density|colorMode|mcc|mnc|touchscreen"
+            android:configChanges="@integer/blender_config_changes"
             android:exported="false"
             android:launchMode="singleTask"
             android:preferMinimalPostProcessing="true"

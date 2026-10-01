@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+    android:configChanges of BlenderActivity: SDL can't continue in a new activity (it ends
+    Blender), the activity must never be re-created.
+    0x0000FFFF: mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|orientation|
+                screenLayout|uiMode|screenSize|smallestScreenSize|density|layoutDirection|
+                colorMode|grammaticalGender
+    0x10000000: fontWeightAdjustment, 0x40000000: fontScale
+    0x80000000: ActivityInfo.CONFIG_ASSETS_PATHS, changes of resource overlays (colors from the
+                wallpaper, themes, navigation mode...), while the application is in the
+                background too. Hidden in the SDK, it has no flag name.
+    -->
+    <integer name="blender_config_changes">0xD000FFFF</integer>
+</resources>

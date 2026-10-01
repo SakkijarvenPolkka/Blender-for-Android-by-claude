@@ -1432,7 +1432,7 @@ index 2f9cf83..9572d03 100644
      if(DEFINED LIBDIR)
        add_definitions(-DARCH_HAS_GNU_STL_EXTENSIONS)
 diff --git a/source/blender/windowmanager/intern/wm_window.cc b/source/blender/windowmanager/intern/wm_window.cc
-index 4c0aa2c..397b204 100644
+index 4c0aa2c..14a8b87 100644
 --- a/source/blender/windowmanager/intern/wm_window.cc
 +++ b/source/blender/windowmanager/intern/wm_window.cc
 @@ -47,6 +47,12 @@
@@ -1448,7 +1448,7 @@ index 4c0aa2c..397b204 100644
  #include "BKE_blender_version.h"
  #include "BKE_context.hh"
  #include "BKE_global.hh"
-@@ -2266,6 +2272,68 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
+@@ -2266,6 +2272,77 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
  
  #endif /* WITH_GHOST_CSD */
  
@@ -1469,19 +1469,32 @@ index 4c0aa2c..397b204 100644
 +}
 +
 +/** Write the auto-save file when there are unsaved changes and it's possible. */
-+static void wm_android_autosave(wmWindowManager *wm, Main *bmain, const char *reason)
++static void wm_android_autosave(wmWindowManager *wm,
++                                Main *bmain,
++                                const char *reason,
++                                const bool exiting)
 +{
 +  if (wm == nullptr || wm->file_saved) {
 +    return;
 +  }
-+  /* Like the auto-save timer: the data can't be saved while an operator runs
-+   * (the regular auto-save file is kept). */
-+  if (wm_android_modal_operator_running(wm)) {
++  /* Like the auto-save timer: skip while an operator runs (the regular auto-save file is kept),
++   * except when exiting: there is no later (like the `quit.blend` written by #WM_exit_ex). */
++  if (!exiting && wm_android_modal_operator_running(wm)) {
 +    printf("Android: %s while an operator runs, no auto-save\n", reason);
 +    return;
 +  }
 +  printf("Android: %s, writing the auto-save file\n", reason);
 +  WM_autosave_write(wm, bmain, &wm->runtime->reports);
++}
++
++/** Write the preferences like the regular exit does (not after loading the factory settings). */
++static void wm_android_userpref_write()
++{
++  if ((U.pref_flag & USER_PREF_FLAG_SAVE) && ((G.f & G_FLAG_USERPREF_NO_SAVE_ON_EXIT) == 0) &&
++      U.runtime.is_dirty)
++  {
++    BKE_blendfile_userdef_write_all(nullptr);
++  }
 +}
 +
 +/**
@@ -1494,20 +1507,16 @@ index 4c0aa2c..397b204 100644
 +  wmWindowManager *wm = bmain ? static_cast<wmWindowManager *>(bmain->wm.first) : nullptr;
 +
 +  if (event == GHOST_kAndroidLifecycleEnterBackground) {
-+    wm_android_autosave(wm, bmain, "application paused");
-+    if ((U.pref_flag & USER_PREF_FLAG_SAVE) && U.runtime.is_dirty) {
-+      BKE_blendfile_userdef_write_all(nullptr);
-+    }
++    wm_android_autosave(wm, bmain, "application paused", false);
++    wm_android_userpref_write();
 +  }
 +  else if (event == GHOST_kAndroidLifecycleTerminating) {
 +    /* The activity is destroyed and SDL shut down from the Java side, Blender can't continue
 +     * (the regular exit asks to save changes). SDL may not report the pause first (when the
 +     * activity is destroyed before Blender's main thread processed events). */
 +    printf("Android: application terminated\n");
-+    wm_android_autosave(wm, bmain, "application terminated");
-+    if ((U.pref_flag & USER_PREF_FLAG_SAVE) && U.runtime.is_dirty) {
-+      BKE_blendfile_userdef_write_all(nullptr);
-+    }
++    wm_android_autosave(wm, bmain, "application terminated", true);
++    wm_android_userpref_write();
 +    fflush(stdout);
 +    _exit(EXIT_SUCCESS);
 +  }
@@ -1517,7 +1526,7 @@ index 4c0aa2c..397b204 100644
  void wm_ghost_init(bContext *C)
  {
    if (g_system) {
-@@ -2283,6 +2351,9 @@ void wm_ghost_init(bContext *C)
+@@ -2283,6 +2360,9 @@ void wm_ghost_init(bContext *C)
    GHOST_ISystem::createSystem();
    g_system = GHOST_ISystem::getSystem();
    GPU_backend_ghost_system_set(g_system);

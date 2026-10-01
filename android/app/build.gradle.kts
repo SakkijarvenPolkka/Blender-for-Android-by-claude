@@ -11,26 +11,39 @@ val nativeLibsDir = (findProperty("blender.nativeLibsDir") as String?) ?: "$work
 val assetsDir = (findProperty("blender.assetsDir") as String?) ?: "$workDir/apk/assets"
 val sdlJavaDir = (findProperty("blender.sdlJavaDir") as String?)
     ?: "$workDir/android_arm64_libs/share/sdl3-java"
-// SDL3's Java sources, with a larger stack for the thread running Blender (SDL starts it with
-// the default stack size of about 1MB, desktop systems give the main thread 8MB): deep recursion
-// (Python, node trees, file formats) would overflow it.
+// SDL3's Java sources, with changes:
+// - A larger stack for the thread running Blender (SDL starts it with the default stack size of
+//   about 1MB, desktop systems give the main thread 8MB): deep recursion (Python, node trees,
+//   file formats) would overflow it.
+// - When the activity is destroyed, SDL waits 1 second for its thread, then destroys its event
+//   queue, also when the thread still runs: Blender (busy writing the auto-save when the
+//   application went to the background) would never get the quit event and then wait for events
+//   forever. Blender exits when it gets it (the process ends while the activity waits).
 val sdlJavaGenDir = layout.buildDirectory.dir("generated/sdl-java").get().asFile
 val sdlThreadStackSize = 16L * 1024 * 1024
+val sdlThreadQuitTimeoutMs = 8000L
+val sdlJavaReplacements = mapOf(
+    "new Thread(new SDLMain(), \"SDLThread\")" to
+        "new Thread(null, new SDLMain(), \"SDLThread\", ${sdlThreadStackSize}L)",
+    "SDLActivity.mSDLThread.join(1000);" to
+        "SDLActivity.mSDLThread.join(${sdlThreadQuitTimeoutMs}L);",
+    "        SDLActivity.nativeQuit();" to
+        "        if (SDLActivity.mSDLThread == null || !SDLActivity.mSDLThread.isAlive()) SDLActivity.nativeQuit();",
+)
 val prepareSdlJava by tasks.registering(Sync::class) {
     from(sdlJavaDir)
     into(sdlJavaGenDir)
     filesMatching("**/SDLActivity.java") {
         filter { line ->
-            line.replace(
-                "new Thread(new SDLMain(), \"SDLThread\")",
-                "new Thread(null, new SDLMain(), \"SDLThread\", ${sdlThreadStackSize}L)"
-            )
+            sdlJavaReplacements.entries.fold(line) { text, (from, to) -> text.replace(from, to) }
         }
     }
     doLast {
-        val activity = sdlJavaGenDir.walk().first { it.name == "SDLActivity.java" }
-        check(activity.readText().contains("\"SDLThread\", ${sdlThreadStackSize}L)")) {
-            "SDLActivity.java: the SDL thread creation changed, update prepareSdlJava"
+        val activity = sdlJavaGenDir.walk().first { it.name == "SDLActivity.java" }.readText()
+        for (to in sdlJavaReplacements.values) {
+            check(activity.split(to).size == 2) {
+                "SDLActivity.java changed (expected \"$to\" once), update prepareSdlJava"
+            }
         }
     }
 }
