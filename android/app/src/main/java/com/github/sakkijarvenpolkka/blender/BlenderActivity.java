@@ -1,6 +1,7 @@
 package com.github.sakkijarvenpolkka.blender;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -8,11 +9,13 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.SurfaceHolder;
 import android.view.WindowManager;
 import android.widget.RelativeLayout;
 
 import org.blender.ghost.GhostAndroid;
 import org.libsdl.app.SDLActivity;
+import org.libsdl.app.SDLSurface;
 
 /**
  * Hosts Blender. SDL3 provides the surface, input and life-cycle handling,
@@ -80,6 +83,56 @@ public class BlenderActivity extends SDLActivity {
     protected void onDestroy() {
         BackgroundService.stop(this);
         super.onDestroy();
+    }
+
+    /**
+     * "Back" never closes Blender (it's escape once Blender runs, SDL would finish the activity
+     * before that), the application goes to the background instead.
+     */
+    @Override
+    public void onBackPressed() {
+        moveTaskToBack(true);
+    }
+
+    @Override
+    public void superOnBackPressed() {
+        moveTaskToBack(true);
+    }
+
+    @Override
+    protected SDLSurface createSDLSurface(Context context) {
+        return new BlenderSurface(context);
+    }
+
+    /**
+     * SDL's surface, also telling Blender when the surface is destroyed & created again: Blender
+     * draws to it with Vulkan and must create a new Vulkan surface. SDL's life-cycle events don't
+     * cover all cases (a pause & resume can cancel out before Blender processes events).
+     */
+    static final class BlenderSurface extends SDLSurface {
+        /** The surface was destroyed, Blender must be told when there's a new one. */
+        private boolean surfaceLost = false;
+
+        BlenderSurface(Context context) {
+            super(context);
+        }
+
+        @Override
+        public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            super.surfaceChanged(holder, format, width, height);
+            // Resizes are handled by SDL's window events.
+            if (surfaceLost && mIsSurfaceReady) {
+                surfaceLost = false;
+                GhostAndroid.surfaceChanged(true);
+            }
+        }
+
+        @Override
+        public void surfaceDestroyed(SurfaceHolder holder) {
+            super.surfaceDestroyed(holder);
+            surfaceLost = true;
+            GhostAndroid.surfaceChanged(false);
+        }
     }
 
     @Override

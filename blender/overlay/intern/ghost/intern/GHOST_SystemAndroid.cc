@@ -75,6 +75,7 @@ void GHOST_AndroidSetLifecycleCallback(GHOST_TAndroidLifecycleCallback callback)
 /** Custom SDL event types (zero until the system is created). */
 static uint32_t g_event_toggle_keyboard = 0;
 static uint32_t g_event_open_file = 0;
+static uint32_t g_event_surface = 0;
 
 void GHOST_AndroidToggleVirtualKeyboard()
 {
@@ -100,6 +101,17 @@ void GHOST_AndroidOpenFile(const char *filepath)
   }
 }
 
+void GHOST_AndroidSurfaceChanged(const bool available)
+{
+  if (g_event_surface == 0) {
+    return;
+  }
+  SDL_Event event = {};
+  event.type = g_event_surface;
+  event.user.code = available ? 1 : 0;
+  SDL_PushEvent(&event);
+}
+
 #include <jni.h>
 
 extern "C" {
@@ -116,6 +128,13 @@ JNIEXPORT void JNICALL Java_org_blender_ghost_GhostAndroid_openFile(JNIEnv *env,
   const char *filepath_utf8 = env->GetStringUTFChars(filepath, nullptr);
   GHOST_AndroidOpenFile(filepath_utf8);
   env->ReleaseStringUTFChars(filepath, filepath_utf8);
+}
+
+JNIEXPORT void JNICALL Java_org_blender_ghost_GhostAndroid_surfaceChanged(JNIEnv * /*env*/,
+                                                                         jclass /*cls*/,
+                                                                         jboolean available)
+{
+  GHOST_AndroidSurfaceChanged(available != JNI_FALSE);
 }
 }
 
@@ -140,6 +159,8 @@ GHOST_SystemAndroid::GHOST_SystemAndroid() : GHOST_System()
   SDL_SetHint(SDL_HINT_ANDROID_BLOCK_ON_PAUSE, "0");
   /* Blender draws the IME composition string itself. */
   SDL_SetHint(SDL_HINT_IME_IMPLEMENTED_UI, "composition");
+  /* Blender handles signals itself, SDL would turn SIGINT & SIGTERM into a quit request. */
+  SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
   if (std::getenv("BLENDER_ANDROID_ORIENTATIONS") == nullptr) {
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
   }
@@ -151,15 +172,22 @@ GHOST_SystemAndroid::GHOST_SystemAndroid() : GHOST_System()
     throw std::runtime_error(SDL_GetError());
   }
 
-  const uint32_t user_events = SDL_RegisterEvents(2);
+  const uint32_t user_events = SDL_RegisterEvents(3);
   if (user_events != 0) {
     g_event_open_file = user_events;
     g_event_toggle_keyboard = user_events + 1;
+    g_event_surface = user_events + 2;
   }
+
+  SDL_AddEventWatch(lifecycleEventWatch, this);
 }
 
 GHOST_SystemAndroid::~GHOST_SystemAndroid()
 {
+  SDL_RemoveEventWatch(lifecycleEventWatch, this);
+  g_event_open_file = 0;
+  g_event_toggle_keyboard = 0;
+  g_event_surface = 0;
   SDL_Quit();
 }
 
@@ -437,6 +465,11 @@ bool GHOST_SystemAndroid::processEvents(bool waitForEvent)
     }
     flushPenMotion();
 
+    /* Sent while SDL pumps events (see #lifecycleEventWatch). */
+    if (processLifecycleEvents()) {
+      any_processed = true;
+    }
+
     if (processTouchTimers(getMilliSeconds())) {
       any_processed = true;
     }
@@ -467,16 +500,6 @@ void GHOST_SystemAndroid::processEvent(const SDL_Event &event)
     case SDL_EVENT_QUIT: {
       pushEvent(std::make_unique<GHOST_Event>(
           SDL_NS_TO_MS(event.quit.timestamp), GHOST_kEventQuitRequest, window_));
-      break;
-    }
-
-    case SDL_EVENT_TERMINATING:
-    case SDL_EVENT_LOW_MEMORY:
-    case SDL_EVENT_WILL_ENTER_BACKGROUND:
-    case SDL_EVENT_DID_ENTER_BACKGROUND:
-    case SDL_EVENT_WILL_ENTER_FOREGROUND:
-    case SDL_EVENT_DID_ENTER_FOREGROUND: {
-      processLifecycleEvent(event);
       break;
     }
 
@@ -580,6 +603,9 @@ void GHOST_SystemAndroid::processEvent(const SDL_Event &event)
         processDropEvent(filepath, getMilliSeconds());
         free(filepath);
       }
+      else if (event.type == g_event_surface && g_event_surface != 0) {
+        processSurfaceChanged(event.user.code != 0);
+      }
       break;
     }
   }
@@ -603,6 +629,56 @@ void GHOST_SystemAndroid::processDropEvent(const char *filepath, uint64_t time_m
                                                    window_->getWidth() / 2,
                                                    window_->getHeight() / 2,
                                                    files));
+}
+
+bool GHOST_SystemAndroid::lifecycleEventWatch(void *userdata, SDL_Event *event)
+{
+  /* Called for every event SDL sends, from any thread (e.g. touch events from the UI thread):
+   * only queue the life-cycle events, they are handled on the main thread. */
+  switch (event->type) {
+    case SDL_EVENT_TERMINATING:
+    case SDL_EVENT_LOW_MEMORY:
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:
+    case SDL_EVENT_DID_ENTER_BACKGROUND:
+    case SDL_EVENT_WILL_ENTER_FOREGROUND:
+    case SDL_EVENT_DID_ENTER_FOREGROUND: {
+      GHOST_SystemAndroid *system = static_cast<GHOST_SystemAndroid *>(userdata);
+      std::lock_guard<std::mutex> lock(system->lifecycle_mutex_);
+      system->lifecycle_events_.push_back(*event);
+      break;
+    }
+    default:
+      break;
+  }
+  return true;
+}
+
+bool GHOST_SystemAndroid::processLifecycleEvents()
+{
+  std::vector<SDL_Event> events;
+  {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    events.swap(lifecycle_events_);
+  }
+  for (const SDL_Event &event : events) {
+    processLifecycleEvent(event);
+  }
+  return !events.empty();
+}
+
+void GHOST_SystemAndroid::processSurfaceChanged(const bool available)
+{
+  if (window_ == nullptr) {
+    return;
+  }
+  CLOG_INFO(&LOG, "Surface %s", available ? "available" : "destroyed");
+  window_->setSurfaceAvailable(available);
+  if (available) {
+    if (window_->updateSize()) {
+      pushEvent(std::make_unique<GHOST_Event>(getMilliSeconds(), GHOST_kEventWindowSize, window_));
+    }
+    window_->invalidate();
+  }
 }
 
 void GHOST_SystemAndroid::processLifecycleEvent(const SDL_Event &event)
@@ -640,7 +716,8 @@ void GHOST_SystemAndroid::processLifecycleEvent(const SDL_Event &event)
       break;
     }
     case SDL_EVENT_LOW_MEMORY: {
-      CLOG_WARN(&LOG, "Low memory");
+      /* Also sent each time the application goes to the background (`TRIM_MEMORY_UI_HIDDEN`). */
+      CLOG_INFO(&LOG, "Low memory");
       if (g_lifecycle_callback) {
         g_lifecycle_callback(GHOST_kAndroidLifecycleLowMemory);
       }

@@ -57,7 +57,6 @@
             android:name=".LauncherActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|density|keyboard|keyboardHidden|navigation|locale|layoutDirection|fontScale"
             android:exported="true"
-            android:launchMode="singleTask"
             android:theme="@style/Theme.Blender.Launcher">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -87,7 +86,7 @@
 
         <activity
             android:name=".BlenderActivity"
-            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density|colorMode"
+            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation|density|colorMode|mcc|mnc|touchscreen"
             android:exported="false"
             android:launchMode="singleTask"
             android:preferMinimalPostProcessing="true"

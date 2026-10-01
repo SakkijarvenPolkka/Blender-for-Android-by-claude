@@ -12,4 +12,7 @@ public final class GhostAndroid {
 
     /** Open a file (a `.blend` file is handled as if dropped into the window). */
     public static native void openFile(String filepath);
+
+    /** The activity's surface was destroyed ({@code available} false) or created again. */
+    public static native void surfaceChanged(boolean available);
 }

@@ -1,7 +1,9 @@
 package com.github.sakkijarvenpolkka.blender;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.app.ApplicationExitInfo;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
@@ -27,6 +29,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.text.DateFormat;
+import java.util.Date;
+import java.util.List;
 
 /**
  * Entry point: checks the device, extracts Blender's data on first start (or after an update),
@@ -43,6 +48,7 @@ public class LauncherActivity extends Activity {
 
     static final String PREFS = "blender";
     static final String PREF_ASKED_STORAGE = "asked_all_files_access";
+    static final String PREF_EXIT_SHOWN = "exit_info_shown";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView status;
@@ -53,6 +59,15 @@ public class LauncherActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Started from the launcher while Blender runs: return to it instead of starting again.
+        Intent launch = getIntent();
+        if (!isTaskRoot() && launch != null && Intent.ACTION_MAIN.equals(launch.getAction())
+                && launch.hasCategory(Intent.CATEGORY_LAUNCHER)) {
+            finish();
+            return;
+        }
+
         setContentView(createLayout());
 
         if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_VULKAN_HARDWARE_VERSION, VULKAN_1_2)) {
@@ -148,6 +163,134 @@ public class LauncherActivity extends Activity {
 
     private void afterInstall() {
         progress.setProgress(1000);
+        showPreviousExit(this::checkDontKeepActivities);
+    }
+
+    /**
+     * The developer option "Don't keep activities" destroys Blender's activity as soon as it goes
+     * to the background, which ends Blender (SDL can't run without its activity).
+     */
+    private void checkDontKeepActivities() {
+        if (Settings.Global.getInt(getContentResolver(), Settings.Global.ALWAYS_FINISH_ACTIVITIES, 0) == 0) {
+            askStorageAndStart();
+            return;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.dont_keep_title)
+            .setMessage(R.string.dont_keep_message)
+            .setPositiveButton(R.string.dont_keep_settings, (dialog, which) -> {
+                try {
+                    startActivity(new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS));
+                } catch (Exception e) {
+                    Log.w(TAG, "Unable to open the developer options", e);
+                }
+                askStorageAndStart();
+            })
+            .setNegativeButton(R.string.dont_keep_continue, (dialog, which) -> askStorageAndStart())
+            .setCancelable(false)
+            .show();
+    }
+
+    /**
+     * Tells the user when the previous session ended unexpectedly (crash, killed by the system...)
+     * and keeps the details (with the native crash report) in the app's external files folder.
+     */
+    private void showPreviousExit(Runnable next) {
+        ApplicationExitInfo info = null;
+        try {
+            List<ApplicationExitInfo> infos = getSystemService(ActivityManager.class)
+                .getHistoricalProcessExitReasons(getPackageName(), 0, 1);
+            if (!infos.isEmpty()) {
+                info = infos.get(0);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Unable to read the exit reasons", e);
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (info == null || info.getTimestamp() <= prefs.getLong(PREF_EXIT_SHOWN, 0)) {
+            next.run();
+            return;
+        }
+        prefs.edit().putLong(PREF_EXIT_SHOWN, info.getTimestamp()).apply();
+        String reason = exitReasonName(info.getReason());
+        Log.i(TAG, "Previous exit: " + reason + " (" + info.getDescription() + ")");
+        switch (info.getReason()) {
+            case ApplicationExitInfo.REASON_CRASH:
+            case ApplicationExitInfo.REASON_CRASH_NATIVE:
+            case ApplicationExitInfo.REASON_ANR:
+            case ApplicationExitInfo.REASON_LOW_MEMORY:
+            case ApplicationExitInfo.REASON_SIGNALED:
+            case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE:
+            case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE:
+                break;
+            default:
+                // Quit normally, removed from the recent applications, updated...
+                next.run();
+                return;
+        }
+        File report = writeExitReport(info, reason);
+        String when = DateFormat.getDateTimeInstance().format(new Date(info.getTimestamp()));
+        new AlertDialog.Builder(this)
+            .setTitle(R.string.exit_title)
+            .setMessage(getString(R.string.exit_message, reason, when,
+                                  report != null ? report.getAbsolutePath() : "-"))
+            .setPositiveButton(android.R.string.ok, (dialog, which) -> next.run())
+            .setCancelable(false)
+            .show();
+    }
+
+    private static String exitReasonName(int reason) {
+        switch (reason) {
+            case ApplicationExitInfo.REASON_CRASH: return "crash (Java)";
+            case ApplicationExitInfo.REASON_CRASH_NATIVE: return "crash (native)";
+            case ApplicationExitInfo.REASON_ANR: return "not responding";
+            case ApplicationExitInfo.REASON_LOW_MEMORY: return "low memory";
+            case ApplicationExitInfo.REASON_SIGNALED: return "signal";
+            case ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: return "excessive resource usage";
+            case ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "initialization failure";
+            case ApplicationExitInfo.REASON_EXIT_SELF: return "exit";
+            case ApplicationExitInfo.REASON_USER_REQUESTED: return "closed by the user";
+            default: return "reason " + reason;
+        }
+    }
+
+    /** Writes the exit information (and the native crash report) next to the user's files. */
+    private File writeExitReport(ApplicationExitInfo info, String reason) {
+        File dir = getExternalFilesDir(null);
+        if (dir == null) {
+            return null;
+        }
+        File report = new File(dir, "last_exit.txt");
+        try (OutputStream out = new FileOutputStream(report)) {
+            String text = "Reason: " + reason + "\nStatus: " + info.getStatus()
+                + "\nDescription: " + info.getDescription()
+                + "\nImportance: " + info.getImportance()
+                + "\nTime: " + new Date(info.getTimestamp())
+                + "\nApp version: " + BuildConfig.VERSION_NAME + "\n";
+            out.write(text.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            try (InputStream trace = info.getTraceInputStream()) {
+                if (trace != null) {
+                    if (info.getReason() == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+                        // A tombstone (protobuf, see Android's `tombstone.proto`).
+                        try (OutputStream tombstone = new FileOutputStream(new File(dir, "last_exit_tombstone.pb"))) {
+                            trace.transferTo(tombstone);
+                        }
+                        out.write("\nNative crash report: last_exit_tombstone.pb\n".getBytes(
+                            java.nio.charset.StandardCharsets.UTF_8));
+                    } else {
+                        out.write("\nTrace:\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                        trace.transferTo(out);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            Log.w(TAG, "Unable to write " + report, e);
+            return null;
+        }
+        return report;
+    }
+
+    private void askStorageAndStart() {
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         if (!Environment.isExternalStorageManager() && !prefs.getBoolean(PREF_ASKED_STORAGE, false)) {
             prefs.edit().putBoolean(PREF_ASKED_STORAGE, true).apply();

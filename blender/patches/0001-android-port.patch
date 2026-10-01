@@ -200,7 +200,7 @@ index 8c3e57e..37c816b 100644
    list(APPEND SRC
      intern/GHOST_ContextSDL.cc
 diff --git a/intern/ghost/intern/GHOST_ContextVK.cc b/intern/ghost/intern/GHOST_ContextVK.cc
-index 7ccfafa..59be79a 100644
+index 7ccfafa..96cfc67 100644
 --- a/intern/ghost/intern/GHOST_ContextVK.cc
 +++ b/intern/ghost/intern/GHOST_ContextVK.cc
 @@ -21,6 +21,10 @@
@@ -366,7 +366,7 @@ index 7ccfafa..59be79a 100644
  #endif
    }
    /* there is no valid swapchain when the previous window was minimized. User can have maximized
-@@ -964,8 +1044,38 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
+@@ -964,10 +1044,51 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
                                               submission_frame_data.acquire_semaphore,
                                               VK_NULL_HANDLE,
                                               &image_index);
@@ -404,8 +404,21 @@ index 7ccfafa..59be79a 100644
 +#endif
        }
      }
++#ifdef __ANDROID__
++    if (swapchain_ != VK_NULL_HANDLE && acquire_result != VK_SUCCESS) {
++      /* No image was acquired (the acquire semaphore won't be signaled), drawing to image 0 would
++       * wait forever when presenting. The swap-chain is created again next frame. */
++      CLOG_WARN(&LOG,
++                "Android: acquiring a swap-chain image failed (%s), recreating the swap-chain",
++                blender::gpu::to_string(acquire_result));
++      submission_frame_data.discard_pile.swapchains.push_back(swapchain_);
++      swapchain_ = VK_NULL_HANDLE;
++    }
++#endif
    }
-@@ -1101,6 +1211,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
+ 
+   /* Acquired callback is also called when there is no swapchain.
+@@ -1101,6 +1222,19 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
    }
    acquired_swapchain_image_index_.reset();
  
@@ -425,7 +438,55 @@ index 7ccfafa..59be79a 100644
    if (ELEM(present_result, VK_ERROR_OUT_OF_DATE_KHR, VK_SUBOPTIMAL_KHR)) {
      recreateSwapchain(use_hdr_swapchain);
      return GHOST_kSuccess;
-@@ -1361,6 +1484,17 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1243,10 +1377,20 @@ static GHOST_TSuccess selectPresentMode(const GHOST_TVSyncModes vsync,
+                                         VkSurfaceKHR surface,
+                                         VkPresentModeKHR *r_presentMode)
+ {
+-  uint32_t present_count;
+-  vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &present_count, nullptr);
++  uint32_t present_count = 0;
++  if (vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &present_count, nullptr) !=
++      VK_SUCCESS)
++  {
++    /* Surface lost (Android activity in the background). */
++    return GHOST_kFailure;
++  }
+   vector<VkPresentModeKHR> presents(present_count);
+-  vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &present_count, presents.data());
++  if (vkGetPhysicalDeviceSurfacePresentModesKHR(
++          device, surface, &present_count, presents.data()) < VK_SUCCESS)
++  {
++    return GHOST_kFailure;
++  }
++  presents.resize(present_count);
+ 
+   if (vsync != GHOST_kVSyncModeUnset) {
+     const bool vsync_off = (vsync == GHOST_kVSyncModeOff);
+@@ -1292,10 +1436,20 @@ static bool selectSurfaceFormat(const VkPhysicalDevice physical_device,
+                                 bool use_hdr_swapchain,
+                                 VkSurfaceFormatKHR &r_surfaceFormat)
+ {
+-  uint32_t format_count;
+-  vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, nullptr);
++  uint32_t format_count = 0;
++  if (vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, nullptr) !=
++      VK_SUCCESS)
++  {
++    /* Surface lost (Android activity in the background). */
++    return false;
++  }
+   vector<VkSurfaceFormatKHR> formats(format_count);
+-  vkGetPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &format_count, formats.data());
++  if (vkGetPhysicalDeviceSurfaceFormatsKHR(
++          physical_device, surface, &format_count, formats.data()) < VK_SUCCESS)
++  {
++    return false;
++  }
++  formats.resize(format_count);
+ 
+   array<VkSurfaceFormatKHR, 3> selection_order = {{
+ #if defined(_WIN32) || defined(__APPLE__)
+@@ -1361,6 +1515,17 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    GHOST_InstanceVK &instance_vk = vulkan_instance.value();
    GHOST_DeviceVK &device_vk = instance_vk.device.value();
  
@@ -443,7 +504,7 @@ index 7ccfafa..59be79a 100644
    surface_format_ = {};
    if (!selectSurfaceFormat(
            device_vk.vk_physical_device, surface_, use_hdr_swapchain, surface_format_))
-@@ -1388,6 +1522,12 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1388,6 +1553,12 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    VkSurfaceCapabilitiesKHR capabilities = {};
  
    if (device_vk.use_vk_ext_swapchain_maintenance_1) {
@@ -456,7 +517,7 @@ index 7ccfafa..59be79a 100644
      VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilities2KHR(device_vk.vk_physical_device,
                                                          &vk_physical_device_surface_info,
                                                          &vk_surface_capabilities),
-@@ -1417,6 +1557,13 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1417,6 +1588,13 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
      }
  #endif
  
@@ -470,7 +531,7 @@ index 7ccfafa..59be79a 100644
      if (width == 0 || height == 0) {
        width = 1280;
        height = 720;
-@@ -1433,6 +1580,26 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1433,6 +1611,26 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
      }
    }
  
@@ -497,7 +558,7 @@ index 7ccfafa..59be79a 100644
    if (device_vk.use_vk_ext_swapchain_maintenance_1) {
      if (vk_surface_present_scaling_capabilities.minScaledImageExtent.width > render_extent_.width)
      {
-@@ -1514,8 +1681,20 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
+@@ -1514,8 +1712,20 @@ GHOST_TSuccess GHOST_ContextVK::recreateSwapchain(bool use_hdr_swapchain)
    create_info.imageArrayLayers = 1;
    create_info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                             (use_hdr_swapchain ? VK_IMAGE_USAGE_STORAGE_BIT : 0);
@@ -518,7 +579,7 @@ index 7ccfafa..59be79a 100644
    create_info.presentMode = present_mode;
    create_info.clipped = VK_TRUE;
    create_info.oldSwapchain = old_swapchain;
-@@ -1630,6 +1809,11 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+@@ -1630,6 +1840,11 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
      case GHOST_kVulkanPlatformWayland:
        return VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME;
        break;
@@ -530,7 +591,7 @@ index 7ccfafa..59be79a 100644
  #  endif
      case GHOST_kVulkanPlatformHeadless:
        break;
-@@ -1638,6 +1822,75 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
+@@ -1638,6 +1853,83 @@ const char *GHOST_ContextVK::getPlatformSpecificSurfaceExtension() const
    return nullptr;
  }
  
@@ -547,9 +608,17 @@ index 7ccfafa..59be79a 100644
 +  VkAndroidSurfaceCreateInfoKHR surface_create_info = {};
 +  surface_create_info.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
 +  surface_create_info.window = android_surface_window_;
-+  VK_CHECK(vkCreateAndroidSurfaceKHR(
-+               vulkan_instance->vk_instance, &surface_create_info, nullptr, &surface_),
-+           GHOST_kFailure);
++  const VkResult result = vkCreateAndroidSurfaceKHR(
++      vulkan_instance->vk_instance, &surface_create_info, nullptr, &surface_);
++  if (result != VK_SUCCESS) {
++    CLOG_ERROR(&LOG,
++               "Android: creating the Vulkan surface failed (%s), trying again next frame",
++               blender::gpu::to_string(result));
++    surface_ = VK_NULL_HANDLE;
++    /* Never matches the window's generation: #androidUpdateSurface tries again. */
++    android_surface_generation_ = UINT64_MAX;
++    return GHOST_kFailure;
++  }
 +  return GHOST_kSuccess;
 +}
 +
@@ -606,7 +675,7 @@ index 7ccfafa..59be79a 100644
  GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
  {
    bool use_vk_ext_swapchain_colorspace = false;
-@@ -1657,6 +1910,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1657,6 +1949,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
      case GHOST_kVulkanPlatformWayland:
        use_window_surface = (wayland_display_ != nullptr) && (wayland_surface_ != nullptr);
        break;
@@ -618,7 +687,7 @@ index 7ccfafa..59be79a 100644
  #  endif
      case GHOST_kVulkanPlatformHeadless:
        use_window_surface = false;
-@@ -1757,6 +2015,14 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1757,6 +2054,14 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
          break;
        }
  #  endif
@@ -633,7 +702,7 @@ index 7ccfafa..59be79a 100644
  #  ifdef WITH_GHOST_WAYLAND
        case GHOST_kVulkanPlatformWayland: {
          VkWaylandSurfaceCreateInfoKHR surface_create_info = {};
-@@ -1788,7 +2054,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
+@@ -1788,7 +2093,11 @@ GHOST_TSuccess GHOST_ContextVK::initializeDrawingContext()
      optional_device_extensions.append(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
  #endif
  
@@ -1363,7 +1432,7 @@ index 2f9cf83..9572d03 100644
      if(DEFINED LIBDIR)
        add_definitions(-DARCH_HAS_GNU_STL_EXTENSIONS)
 diff --git a/source/blender/windowmanager/intern/wm_window.cc b/source/blender/windowmanager/intern/wm_window.cc
-index 4c0aa2c..9077d57 100644
+index 4c0aa2c..397b204 100644
 --- a/source/blender/windowmanager/intern/wm_window.cc
 +++ b/source/blender/windowmanager/intern/wm_window.cc
 @@ -47,6 +47,12 @@
@@ -1379,7 +1448,7 @@ index 4c0aa2c..9077d57 100644
  #include "BKE_blender_version.h"
  #include "BKE_context.hh"
  #include "BKE_global.hh"
-@@ -2266,6 +2272,57 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
+@@ -2266,6 +2272,68 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
  
  #endif /* WITH_GHOST_CSD */
  
@@ -1399,9 +1468,25 @@ index 4c0aa2c..9077d57 100644
 +  return false;
 +}
 +
++/** Write the auto-save file when there are unsaved changes and it's possible. */
++static void wm_android_autosave(wmWindowManager *wm, Main *bmain, const char *reason)
++{
++  if (wm == nullptr || wm->file_saved) {
++    return;
++  }
++  /* Like the auto-save timer: the data can't be saved while an operator runs
++   * (the regular auto-save file is kept). */
++  if (wm_android_modal_operator_running(wm)) {
++    printf("Android: %s while an operator runs, no auto-save\n", reason);
++    return;
++  }
++  printf("Android: %s, writing the auto-save file\n", reason);
++  WM_autosave_write(wm, bmain, &wm->runtime->reports);
++}
++
 +/**
 + * Android can terminate applications in the background without notice,
-+ * write a recovery file (auto-save) when the application is paused.
++ * write a recovery file (auto-save) & the preferences when the application is paused.
 + */
 +static void wm_ghost_android_lifecycle(GHOST_TAndroidLifecycleEvent event)
 +{
@@ -1409,26 +1494,21 @@ index 4c0aa2c..9077d57 100644
 +  wmWindowManager *wm = bmain ? static_cast<wmWindowManager *>(bmain->wm.first) : nullptr;
 +
 +  if (event == GHOST_kAndroidLifecycleEnterBackground) {
-+    if (wm == nullptr || wm->file_saved) {
-+      return;
-+    }
-+    /* Like the auto-save timer: the data can't be saved while an operator runs
-+     * (the regular auto-save file is kept). */
-+    if (wm_android_modal_operator_running(wm)) {
-+      CLOG_WARN(&LOG_GHOST_SYSTEM, "Application paused while an operator runs, no auto-save");
-+      return;
-+    }
-+    CLOG_INFO(&LOG_GHOST_SYSTEM, "Application paused, writing auto-save file");
-+    WM_autosave_write(wm, bmain, &wm->runtime->reports);
-+  }
-+  else if (event == GHOST_kAndroidLifecycleTerminating) {
-+    /* The activity is destroyed and SDL shut down from the Java side, Blender can't continue
-+     * (the regular exit asks to save changes). The auto-save file was written when the
-+     * application was paused, which always happens first. */
-+    CLOG_INFO(&LOG_GHOST_SYSTEM, "Application terminated");
++    wm_android_autosave(wm, bmain, "application paused");
 +    if ((U.pref_flag & USER_PREF_FLAG_SAVE) && U.runtime.is_dirty) {
 +      BKE_blendfile_userdef_write_all(nullptr);
 +    }
++  }
++  else if (event == GHOST_kAndroidLifecycleTerminating) {
++    /* The activity is destroyed and SDL shut down from the Java side, Blender can't continue
++     * (the regular exit asks to save changes). SDL may not report the pause first (when the
++     * activity is destroyed before Blender's main thread processed events). */
++    printf("Android: application terminated\n");
++    wm_android_autosave(wm, bmain, "application terminated");
++    if ((U.pref_flag & USER_PREF_FLAG_SAVE) && U.runtime.is_dirty) {
++      BKE_blendfile_userdef_write_all(nullptr);
++    }
++    fflush(stdout);
 +    _exit(EXIT_SUCCESS);
 +  }
 +}
@@ -1437,7 +1517,7 @@ index 4c0aa2c..9077d57 100644
  void wm_ghost_init(bContext *C)
  {
    if (g_system) {
-@@ -2283,6 +2340,9 @@ void wm_ghost_init(bContext *C)
+@@ -2283,6 +2351,9 @@ void wm_ghost_init(bContext *C)
    GHOST_ISystem::createSystem();
    g_system = GHOST_ISystem::getSystem();
    GPU_backend_ghost_system_set(g_system);
@@ -1602,3 +1682,83 @@ index 4253893..c4db20f 100644
  /** \} */
  
  }  // namespace blender
+diff --git a/source/creator/creator_signals.cc b/source/creator/creator_signals.cc
+index 5ad1a83..7a337c8 100644
+--- a/source/creator/creator_signals.cc
++++ b/source/creator/creator_signals.cc
+@@ -141,11 +141,41 @@ static void crashlog_file_generate(const char *filepath, const void *os_info)
+   }
+ }
+ 
++#  ifdef __ANDROID__
++/* The handlers of the system (`debuggerd`), which write a tombstone of the crash: Android reports
++ * it as the reason the application exited (`ApplicationExitInfo`, shown by the launcher). */
++static struct sigaction sig_prev_segv;
++static struct sigaction sig_prev_abrt;
++
++static void sig_install(const int signum, void (*handler)(int), struct sigaction *r_prev)
++{
++  struct sigaction action = {};
++  action.sa_handler = handler;
++  sigemptyset(&action.sa_mask);
++  sigaction(signum, &action, r_prev);
++}
++
++/** Raised again when returning from the handler (the signal is blocked while it runs), on the
++ * same thread, for the handler of the system. */
++static void sig_chain(const int signum, const struct sigaction *prev)
++{
++  sigaction(signum, prev, nullptr);
++  raise(signum);
++}
++#  endif
++
+ static void sig_cleanup_and_terminate(int signum)
+ {
+   /* Delete content of temp directory. */
+   BKE_tempdir_session_purge();
+ 
++#  ifdef __ANDROID__
++  if (signum == SIGSEGV) {
++    sig_chain(signum, &sig_prev_segv);
++    return;
++  }
++#  endif
++
+   /* Really crash. */
+   signal(signum, SIG_DFL);
+ #  ifndef WIN32
+@@ -229,6 +259,9 @@ static void sig_handle_abort(int /*signum*/)
+ {
+   /* Delete content of temp directory. */
+   BKE_tempdir_session_purge();
++#  ifdef __ANDROID__
++  sig_chain(SIGABRT, &sig_prev_abrt);
++#  endif
+ }
+ 
+ void main_signal_setup()
+@@ -238,7 +271,11 @@ void main_signal_setup()
+     SetUnhandledExceptionFilter(windows_exception_handler);
+ #  else
+     /* After parsing arguments. */
++#    ifdef __ANDROID__
++    sig_install(SIGSEGV, sig_handle_crash_fn, &sig_prev_segv);
++#    else
+     signal(SIGSEGV, sig_handle_crash_fn);
++#    endif
+ #  endif
+   }
+ 
+@@ -249,7 +286,11 @@ void main_signal_setup()
+ #  endif
+ 
+   if (app_state.signal.use_abort_handler) {
++#  ifdef __ANDROID__
++    sig_install(SIGABRT, sig_handle_abort, &sig_prev_abrt);
++#  else
+     signal(SIGABRT, sig_handle_abort);
++#  endif
+   }
+ }
+ 

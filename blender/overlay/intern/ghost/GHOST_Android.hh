@@ -39,5 +39,11 @@ void GHOST_AndroidSetLifecycleCallback(GHOST_TAndroidLifecycleCallback callback)
  */
 void GHOST_AndroidToggleVirtualKeyboard();
 void GHOST_AndroidOpenFile(const char *filepath);
+/**
+ * The activity's surface was destroyed (`available` false) or created again. Independent of the
+ * life-cycle events, which SDL drops when the activity is paused & resumed before Blender's main
+ * thread processes events.
+ */
+void GHOST_AndroidSurfaceChanged(bool available);
 
 #endif /* __ANDROID__ */

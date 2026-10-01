@@ -28,6 +28,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <mutex>
+
 #include <vector>
 
 class GHOST_WindowAndroid;
@@ -89,6 +91,17 @@ class GHOST_SystemAndroid : public GHOST_System {
   void processPenEvent(const SDL_Event &event);
   void processFingerEvent(const SDL_TouchFingerEvent &event);
   void processLifecycleEvent(const SDL_Event &event);
+  /**
+   * SDL only passes the application life-cycle events (entering the background, terminating ...)
+   * to event watchers, called on the thread sending them: queued here for the main thread.
+   */
+  static bool lifecycleEventWatch(void *userdata, SDL_Event *event);
+  /** Returns true when life-cycle events were processed. */
+  bool processLifecycleEvents();
+  std::mutex lifecycle_mutex_;
+  std::vector<SDL_Event> lifecycle_events_;
+  /** The activity's surface was created or destroyed (see #GHOST_AndroidSurfaceChanged). */
+  void processSurfaceChanged(bool available);
   void processDropEvent(const char *filepath, uint64_t time_ms);
 
   /** Returns true when an event was generated. */

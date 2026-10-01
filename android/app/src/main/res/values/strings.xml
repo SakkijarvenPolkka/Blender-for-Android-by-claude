@@ -27,4 +27,10 @@
     <string name="background_channel">Running in the background</string>
     <string name="background_title">Blender is running in the background</string>
     <string name="background_text">An AI assistant can use Blender (MCP server). Tap to return to Blender.</string>
+    <string name="dont_keep_title">\"Don\'t keep activities\" is on</string>
+    <string name="dont_keep_message">The developer option \"Don\'t keep activities\" closes Blender each time it goes to the background (your work is auto-saved, File › Recover › Auto Save).\n\nTurn it off in Settings › Developer options to keep Blender running.</string>
+    <string name="dont_keep_settings">Developer options</string>
+    <string name="dont_keep_continue">Continue</string>
+    <string name="exit_title">Blender was closed</string>
+    <string name="exit_message">The last session ended unexpectedly (%1$s, %2$s).\n\nUnsaved work can be recovered with File › Recover › Auto Save. Details were saved to %3$s.</string>
 </resources>
