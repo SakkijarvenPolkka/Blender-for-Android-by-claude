@@ -545,6 +545,23 @@ class TunnelTest(unittest.TestCase):
         match = tunnel.QUICK_TUNNEL_URL_RE.search("https://seasonal-deck-organisms-sf.trycloudflare.com")
         self.assertEqual(match.group(1), "https://seasonal-deck-organisms-sf.trycloudflare.com")
 
+    def test_check_not_listed(self):
+        # The address check comes back through Cloudflare (proxy headers): not a request from the internet.
+        server = protocol.Server(host="127.0.0.1", port=0, token="t", tools=[],
+                                 executor=lambda function, timeout: function(),
+                                 server_info={"name": "test", "version": "1"}, log=lambda message: None)
+        server.unlisted_header = (tunnel.CHECK_HEADER.lower(), tunnel.CHECK_NONCE)
+        server.start()
+        self.addCleanup(server.stop)
+        url = "http://127.0.0.1:{:d}/mcp".format(server.port)
+        for nonce in (tunnel.CHECK_NONCE, "guessed"):
+            request = urllib.request.Request(url, headers={tunnel.CHECK_HEADER: nonce, "Cf-Ray": "8d1f-ICN"})
+            with self.assertRaises(urllib.error.HTTPError) as context:
+                urllib.request.urlopen(request, timeout=10)
+            context.exception.close()
+        # Only the request with a wrong value is listed.
+        self.assertEqual([r["status"] for r in server.recent_requests()], [401])
+
     def test_check_public_url_answer(self):
         # The check accepts this server's answer only (not an error page of Cloudflare).
         server = protocol.Server(host="127.0.0.1", port=0, token="t", tools=[],

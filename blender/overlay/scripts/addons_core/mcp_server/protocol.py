@@ -212,6 +212,9 @@ class Server:
         self._pending: dict[str, _PendingCall] = {}
         self._pending_lock = threading.Lock()
         self._recent: collections.deque[dict[str, Any]] = collections.deque(maxlen=RECENT_REQUESTS)
+        # Requests with this header (lower-case name, value) aren't kept in `recent_requests`, e.g.
+        # the tunnel's check of the public address.
+        self.unlisted_header: tuple[str, str] | None = None
         self._httpd: http.server.ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -264,6 +267,8 @@ class Server:
         return list(self._recent)
 
     def record_request(self, method: str, rpc: str, status: int, headers: dict[str, str], error: str = "") -> None:
+        if self.unlisted_header is not None and headers.get(self.unlisted_header[0]) == self.unlisted_header[1]:
+            return
         self._recent.append({
             "time": time.time(),
             "method": method,

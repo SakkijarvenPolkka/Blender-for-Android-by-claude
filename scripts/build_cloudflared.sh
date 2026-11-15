@@ -41,6 +41,12 @@ export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
 # Not in a workspace of the user's; a writable module cache (WORK_DIR can be deleted).
 export GOWORK=off
 export GOFLAGS="${GOFLAGS:+${GOFLAGS} }-mod=mod -modcacherw"
+# -modcacherw only applies once a go command has read its flags: a toolchain it downloads when it
+# starts (GOTOOLCHAIN=auto, e.g. `go build` needs exactly the version of cloudflared's go.mod) is
+# unpacked read-only. Keep WORK_DIR deletable (a module cache elsewhere is left alone).
+case "${GOMODCACHE}" in
+  "${WORK_DIR}"/*) trap 'chmod -R u+w "${GOMODCACHE}"/golang.org/toolchain@* 2>/dev/null || true' EXIT ;;
+esac
 
 log "Downloading cloudflared ${CLOUDFLARED_VERSION} (${CLOUDFLARED_MODULE_VERSION})"
 module_dir="$(go mod download -json "github.com/cloudflare/cloudflared@${CLOUDFLARED_MODULE_VERSION}" \

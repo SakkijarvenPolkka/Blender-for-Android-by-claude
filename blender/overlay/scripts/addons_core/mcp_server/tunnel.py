@@ -32,6 +32,7 @@ import collections
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import stat
@@ -78,6 +79,10 @@ RETRY_DELAYS = (10.0, 20.0, 40.0, 80.0, 160.0, 300.0)
 RATE_LIMIT_DELAY = 60.0
 # Seconds to wait for the public address to work.
 CHECK_TIMEOUT = 90.0
+# Marks the requests of the address check (see `_server_answers`): the server doesn't list them with
+# the requests from the internet. Random, so other requests can't be hidden by sending the header.
+CHECK_HEADER = "X-Blender-MCP-Check"
+CHECK_NONCE = secrets.token_hex(16)
 
 
 def find_executable() -> str | None:
@@ -124,7 +129,7 @@ def _dns_resolves(host: str, timeout: float) -> bool | None:
 
 def _server_answers(url: str, timeout: float) -> bool:
     """Whether the MCP server answers at the public address (unauthorized: no token is sent)."""
-    request = urllib.request.Request(url + "/mcp", headers={"Accept": "application/json"})
+    request = urllib.request.Request(url + "/mcp", headers={"Accept": "application/json", CHECK_HEADER: CHECK_NONCE})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             status, body = response.status, response.read(4096)

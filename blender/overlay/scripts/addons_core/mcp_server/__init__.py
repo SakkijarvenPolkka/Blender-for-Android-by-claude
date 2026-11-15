@@ -239,6 +239,8 @@ def start(*, port: int, token: str, allow_network: bool) -> protocol.Server:
         instructions=tools.instructions(),
         log=_log,
     )
+    # Blender's own check of the public address isn't a request from the internet (panel).
+    server.unlisted_header = (tunnel.CHECK_HEADER.lower(), tunnel.CHECK_NONCE)
     server.start()
     _server = server
     if not bpy.app.background:
