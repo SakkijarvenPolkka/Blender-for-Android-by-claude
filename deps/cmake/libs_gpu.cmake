@@ -13,9 +13,12 @@ add_cmake_dep(vulkan_headers VULKAN_HEADERS
 
 # shaderc builds SPIRV-Tools, SPIRV-Headers and glslang from their source
 # directories as part of its own build, only download & extract those here.
+# In the build directory (not kept): extracted again each time (from the downloaded archives),
+# shaderc may have to be built again (e.g. from the dependencies of an interrupted build).
 foreach(_src SPIRV_HEADERS SPIRV_TOOLS SHADERC_GLSLANG)
   string(TOLOWER ${_src} _name)
   dep_download_args(${_src} _dl)
+  list(APPEND DEPS_ALWAYS_BUILD external_${_name})
   ExternalProject_Add(external_${_name}
     ${_dl}
     PREFIX ${CMAKE_BINARY_DIR}/${_name}

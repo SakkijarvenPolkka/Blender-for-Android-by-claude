@@ -75,8 +75,7 @@ mark_installed
 # (e.g. `.../sysroot/usr/lib/aarch64-linux-android/31/libm.so`). Replace them by the library
 # name: this keeps LIBDIR relocatable and allows linking the build tools statically.
 log "Sanitizing exported CMake configurations"
-find "${LIBDIR}" -name "*.cmake" -print0 | xargs -0 sed -i -E \
-  's#[^;" ]*/sysroot/usr/lib/aarch64-linux-android/[0-9]+/lib([A-Za-z0-9_]+)\.(so|a)#\1#g'
+cmake -DDIR="${LIBDIR}" -P "${REPO_DIR}/deps/cmake/sanitize_cmake_configs.cmake"
 
 if [ "${status}" -eq 124 ]; then
   log "Time limit (${DEPS_TIME_LIMIT}) reached, run again to build the remaining dependencies"

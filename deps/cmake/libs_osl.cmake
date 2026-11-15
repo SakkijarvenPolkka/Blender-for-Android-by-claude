@@ -135,3 +135,15 @@ add_cmake_dep(osl OSL
     -DCMAKE_EXE_LINKER_FLAGS=-static
     -DCMAKE_CROSSCOMPILING_EMULATOR=${QEMU_AARCH64}
 )
+# OSL's tools are linked statically: the exported configurations of its dependencies (installed
+# just before, in the same build) must not contain paths to NDK shared libraries such as
+# `.../31/libm.so` ("attempted static link of dynamic object").
+get_property(_osl_installed TARGET external_osl PROPERTY DEPS_INSTALLED)
+if(NOT _osl_installed)
+  ExternalProject_Add_Step(external_osl sanitize_configs
+    COMMAND ${CMAKE_COMMAND} -DDIR=${LIBDIR} -P ${CMAKE_CURRENT_LIST_DIR}/sanitize_cmake_configs.cmake
+    DEPENDEES patch
+    DEPENDERS configure
+  )
+endif()
+unset(_osl_installed)
