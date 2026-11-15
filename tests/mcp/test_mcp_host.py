@@ -43,7 +43,8 @@ FAKE_CLOUDFLARED = textwrap.dedent(r"""
     import json, os, signal, sys, time
     home = os.environ["HOME"]
     with open(os.path.join(home, "invocation.json"), "w") as fh:
-        json.dump({"argv": sys.argv[1:], "token": os.environ.get("TUNNEL_TOKEN")}, fh)
+        json.dump({"argv": sys.argv[1:], "token": os.environ.get("TUNNEL_TOKEN"),
+                   "dns_resolver_addrs": os.environ.get("TUNNEL_DNS_RESOLVER_ADDRS")}, fh)
     runs_path = os.path.join(home, "runs")
     run = (int(open(runs_path).read()) if os.path.exists(runs_path) else 0) + 1
     with open(runs_path, "w") as fh:
@@ -74,6 +75,10 @@ FAKE_CLOUDFLARED = textwrap.dedent(r"""
         time.sleep(0.2)
         log("INF", "Registered tunnel connection connIndex=0 connection=5ab0e6c6 event=0 ip=198.41.200.13 "
                    "location=icn01 protocol=quic")
+        # Harmless on Android (no /etc/resolv.conf for Go's resolver), repeated every 5 minutes.
+        log("ERR", 'Failed to fetch features, default to disable error="lookup cfd-features.argotunnel.com '
+                   'on [::1]:53: dial udp [::1]:53: connect: connection refused"')
+        log("ERR", 'Failed to initialize DNS local resolver error="open /etc/resolv.conf: no such file or directory"')
 
     def fail(message, code=1):
         # Errors ending cloudflared are printed by urfave/cli, without time & level.
@@ -177,6 +182,8 @@ class ProtocolTest(unittest.TestCase):
         requests = self.server.recent_requests()
         self.assertEqual([(r["rpc"], r["status"], r["proxied"]) for r in requests],
                          [("initialize", 200, True), ("", 401, False)])
+        self.assertEqual(requests[0]["error"], "")
+        self.assertIn("Unauthorized", requests[1]["error"])
         self.assertEqual(requests[0]["client"], "Claude-User")
         # No URL (the token may be part of it).
         self.assertNotIn("secret-1", json.dumps(requests))
@@ -197,6 +204,21 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(data.count(b"HTTP/1.1 "), 1, data)
         self.assertIn(b"401", data.split(b"\r\n")[0])
         self.assertIn(b"Connection: close", data)
+
+    def test_recent_requests_protocol_error(self):
+        # A header problem of the client (2026-07-28 protocol) is visible in the requests log.
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {
+            "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}}).encode()
+        request = urllib.request.Request(
+            "http://127.0.0.1:{:d}/mcp/secret-1".format(self.server.port), data=body, method="POST",
+            headers={"Content-Type": "application/json", "MCP-Protocol-Version": "2026-07-28"})
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            urllib.request.urlopen(request, timeout=10)
+        self.assertEqual(context.exception.code, 400)
+        context.exception.close()
+        last = self.server.recent_requests()[-1]
+        self.assertEqual((last["rpc"], last["status"]), ("tools/list", 400))
+        self.assertIn("Mcp-Method", last["error"])
 
     def test_oauth_discovery_not_found(self):
         # Clients look for OAuth metadata first: none means no OAuth (the token is in the URL).
@@ -330,6 +352,10 @@ class TunnelTest(unittest.TestCase):
         self.assertIn("--no-autoupdate", argv)
         self.assertNotIn("debug", argv)
         self.assertIsNone(self.invocation()["token"])
+        self.assertEqual(self.invocation()["dns_resolver_addrs"], "1.1.1.1:53,1.0.0.1:53")
+        # The harmless errors after the connection aren't shown.
+        self.assertTrue(self.wait_for(lambda: "DNS local resolver" in " ".join(instance.log_lines())))
+        self.assertEqual(instance.error, "")
         start = time.monotonic()
         instance.stop()
         self.assertLess(time.monotonic() - start, 10.0)
@@ -412,6 +438,8 @@ class TunnelTest(unittest.TestCase):
         previous = subprocess.Popen([self.executable, "tunnel", "--config", os.path.join(self.home, "config.yml")],
                                     env={**os.environ, "HOME": self.home}, stdout=subprocess.DEVNULL)
         self.addCleanup(lambda: previous.poll() is None and previous.kill())
+        # Running (its arguments are in /proc once it executes): it writes this file first.
+        self.assertTrue(self.wait_for(lambda: os.path.exists(os.path.join(self.home, "invocation.json"))))
         with open(os.path.join(self.home, "cloudflared.pid"), "w") as fh:
             fh.write(str(previous.pid))
         instance = self.make("quick")

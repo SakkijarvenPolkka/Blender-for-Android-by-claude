@@ -247,12 +247,16 @@ Claude 앱(모바일·웹·데스크톱)의 **사용자 지정 커넥터**는 An
 2. **Start MCP Server** → 패널에 **Ready**가 표시되면 **Copy Connector URL**
    (`https://<주소>/mcp/<토큰>`, 토큰이 들어 있습니다). Blender가 주소가 실제로 동작하는지(DNS, Cloudflare를 거친
    연결) 먼저 확인합니다. 너무 일찍 추가하면 Claude가 실패를 1분쯤 기억합니다.
-3. [claude.ai](https://claude.ai)(휴대폰 브라우저도 가능): **설정 → 커넥터 → 사용자 지정 커넥터 추가**에
-   붙여넣습니다 (인증은 "없음", OAuth 항목은 비워 둡니다). 추가한 커넥터는 Android/iOS 앱에서도
-   채팅의 **+ → 커넥터**로 켜서 씁니다.
+3. [claude.ai](https://claude.ai)(휴대폰 브라우저도 가능): **Customize → Connectors → + Add → Add custom connector**에
+   이름과 URL을 넣습니다. 인증은 **No sign-in(로그인 없음)**, OAuth와 Request headers는 비워 둡니다.
+   추가한 커넥터는 Android/iOS 앱에서도 채팅의 **+ → 커넥터**로 켜서 씁니다.
 
 - 예전에 `http://` 주소로 추가한 커넥터는 동작하지 않으니 삭제하세요. Free 요금제는 사용자 지정 커넥터를
-  하나만 만들 수 있어서, Quick Tunnel의 주소가 바뀌면 새로 추가하지 말고 기존 커넥터의 URL을 수정하세요.
+  하나만 만들 수 있습니다. Quick Tunnel의 주소가 바뀌면 커넥터의 **⋯ 메뉴에서 URL을 수정**하고, 수정할 수 없으면
+  삭제한 뒤 다시 추가하세요.
+- **Keep Awake**(기본값 켜짐): 공개 주소가 있는 동안 화면이 꺼져도 프로세서를 깨워 둡니다. 끄면 기기가 잠들 때
+  Claude가 Blender에 닿지 못합니다 (배터리를 더 씁니다). Galaxy에서는 *설정 → 애플리케이션 → Blender →
+  배터리*를 **제한 없음**으로 하고, *배터리 → 백그라운드 사용 제한*의 절전/완전 절전 앱 목록에 넣지 마세요.
 - URL에 토큰이 들어 있으니 **URL을 가진 사람은 누구나 Blender에서 코드를 실행할 수 있습니다.**
   공유하지 말고, 노출됐다면 **New Token**으로 바꾼 뒤 커넥터 URL을 다시 넣으세요 (터널 주소는 유지됩니다).
   Cloudflare 같은 중계 서비스는 연결 내용을 볼 수 있습니다.
@@ -262,12 +266,15 @@ Claude 앱(모바일·웹·데스크톱)의 **사용자 지정 커넥터**는 An
   JPEG로 줄여서 보냅니다.
 - 서버가 실행되는 동안에만 연결됩니다 (백그라운드에서도 동작). 네트워크가 끊기면 `cloudflared`가 다시
   연결하고, 끝나 버리면 Blender가 다시 시작합니다 (Quick Tunnel은 이때 주소가 바뀌고 패널에 표시됩니다).
-- 휴대폰에서 나가는 연결: TCP 443(`api.trycloudflare.com`), TCP 853(1.1.1.1 DNS-over-TLS), UDP 또는 TCP 7844
-  (Cloudflare 터널, UDP가 막힌 네트워크에서는 TCP로 전환).
-- 연결이 안 될 때: 패널의 **Requests from the internet** 목록에 Claude의 요청(`initialize`, `tools/list` …)과
-  응답 코드가 표시됩니다. 요청이 전혀 없으면 주소·커넥터 설정 문제, `initialize 200` 뒤에 아무 요청도 없으면
-  Claude 쪽 문제일 수 있습니다. 같은 URL을 PC의 Claude Code로 확인할 수 있습니다:
-  `claude mcp add --transport http blender https://<주소>/mcp/<토큰>`.
+- 휴대폰에서 나가는 연결: TCP 443(`api.trycloudflare.com`), DNS 53(1.1.1.1·8.8.8.8) 또는 TCP 853(1.1.1.1
+  DNS-over-TLS) — Android에서 `cloudflared`가 Cloudflare 서버 목록(SRV 레코드)을 찾는 방법, UDP 또는 TCP 7844
+  (Cloudflare 터널, UDP가 막힌 네트워크에서는 TCP로 전환). 회사·학교 Wi-Fi처럼 외부 DNS를 막는 네트워크에서는
+  터널이 연결되지 않을 수 있으니 다른 네트워크(모바일 데이터 등)를 쓰세요.
+- 연결이 안 될 때: 패널의 **Requests from the internet** 목록에 Claude의 요청(`server/discover`, `initialize`,
+  `tools/list` …)과 응답 코드(오류면 그 이유)가 표시됩니다. 요청이 전혀 없으면 주소·커넥터 설정 문제입니다.
+  `initialize 200` 뒤에 아무 요청도 없으면 Claude 쪽 문제일 수 있습니다 (2026년 11월 초부터 새 커넥터에서 보고된
+  claude.ai 버그, [anthropics/claude-ai-mcp#1214](https://github.com/anthropics/claude-ai-mcp/issues/1214)).
+  같은 URL을 PC의 Claude Code로 확인할 수 있습니다: `claude mcp add --transport http blender https://<주소>/mcp/<토큰>`.
 - `cloudflared`는 Cloudflare의 오픈 소스 프로그램입니다 (Apache License 2.0). 라이선스와 포함된 Go 모듈의
   고지는 APK의 `assets/licenses`에 있습니다. 자동 업데이트는 꺼져 있고 APK와 함께 업데이트됩니다.
 
@@ -296,8 +303,8 @@ PC나 서버의 Blender에서도 같은 애드온을 쓸 수 있습니다:
     openjdk-17-jdk qemu-user-static autoconf automake libtool pkg-config flex bison golang
   ```
 - Android SDK/NDK는 스크립트가 자동으로 설치합니다 (NDK r29, SDK platform 35).
-- Go: `cloudflared`(MCP 서버의 HTTPS 주소, `scripts/build_cloudflared.sh`) 빌드에 사용합니다. 버전은 상관없습니다
-  (필요한 버전을 Go가 자동으로 받습니다).
+- Go 1.21 이상: `cloudflared`(MCP 서버의 HTTPS 주소, `scripts/build_cloudflared.sh`) 빌드에 사용합니다
+  (cloudflared가 요구하는 버전은 Go가 자동으로 받습니다).
 
 ### 한 번에 빌드
 

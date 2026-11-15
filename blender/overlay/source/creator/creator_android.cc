@@ -94,12 +94,8 @@ static void log_redirect_init()
  * Called through `ctypes` (e.g. `ctypes.pythonapi.blender_android_keep_alive`).
  * \{ */
 
-/**
- * Keep Blender running while it's in the background (a foreground service with a notification),
- * otherwise Android can freeze or stop the application.
- * The requests are counted: every enable must be matched by a disable.
- */
-extern "C" JNIEXPORT void blender_android_keep_alive(const int enable)
+/** Call a `void name(boolean)` method of the activity. */
+static void activity_call_bool(const char *name, const bool value)
 {
   JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
   jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
@@ -107,15 +103,35 @@ extern "C" JNIEXPORT void blender_android_keep_alive(const int enable)
     return;
   }
   jclass activity_class = env->GetObjectClass(activity);
-  jmethodID method = env->GetMethodID(activity_class, "setKeepAlive", "(Z)V");
+  jmethodID method = env->GetMethodID(activity_class, name, "(Z)V");
   if (method != nullptr) {
-    env->CallVoidMethod(activity, method, jboolean(enable != 0));
+    env->CallVoidMethod(activity, method, jboolean(value));
   }
   if (env->ExceptionCheck()) {
     env->ExceptionClear();
   }
   env->DeleteLocalRef(activity_class);
   env->DeleteLocalRef(activity);
+}
+
+/**
+ * Keep Blender running while it's in the background (a foreground service with a notification),
+ * otherwise Android can freeze or stop the application.
+ * The requests are counted: every enable must be matched by a disable.
+ */
+extern "C" JNIEXPORT void blender_android_keep_alive(const int enable)
+{
+  activity_call_bool("setKeepAlive", enable != 0);
+}
+
+/**
+ * Keep the processor running while the screen is off (a wake lock), e.g. while the MCP server is
+ * reachable from the internet: otherwise the device sleeps and the connection is lost.
+ * The requests are counted: every enable must be matched by a disable.
+ */
+extern "C" JNIEXPORT void blender_android_keep_awake(const int enable)
+{
+  activity_call_bool("setKeepAwake", enable != 0);
 }
 
 /**

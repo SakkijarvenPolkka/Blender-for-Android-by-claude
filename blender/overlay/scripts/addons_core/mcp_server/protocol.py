@@ -258,16 +258,18 @@ class Server:
     def recent_requests(self) -> list[dict[str, Any]]:
         """
         The last requests, oldest first: ``time`` (seconds since the epoch), ``method`` (HTTP),
-        ``rpc`` (JSON-RPC method, with the tool name), ``status``, ``proxied``, ``client``.
+        ``rpc`` (JSON-RPC method, with the tool name), ``status``, ``error`` (message of an error
+        response), ``proxied``, ``client``.
         """
         return list(self._recent)
 
-    def record_request(self, method: str, rpc: str, status: int, headers: dict[str, str]) -> None:
+    def record_request(self, method: str, rpc: str, status: int, headers: dict[str, str], error: str = "") -> None:
         self._recent.append({
             "time": time.time(),
             "method": method,
             "rpc": rpc,
             "status": status,
+            "error": error[:200],
             "proxied": any(name in headers for name in PROXY_HEADERS),
             "client": headers.get("user-agent", "")[:80],
         })
@@ -532,6 +534,18 @@ def _still_running(name: str, job_id: str, elapsed: float) -> dict[str, Any]:
     }
 
 
+def _error_message(payload: Any) -> str:
+    """Message of an error response (JSON-RPC or not), for the requests log."""
+    if isinstance(payload, list):
+        return "; ".join(filter(None, (_error_message(item) for item in payload)))[:200]
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message", ""))
+    return str(error) if isinstance(error, str) else ""
+
+
 def _describe(message: Any) -> str:
     """JSON-RPC method of a message (with the tool's name), for the requests log."""
     if isinstance(message, list):
@@ -581,7 +595,7 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
         return bool(self.headers.get("Transfer-Encoding")) or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
 
     def _send_json(self, status: int, payload: Any, extra_headers: dict[str, str] | None = None) -> None:
-        self.mcp.record_request(self.command, self._rpc, status, self._headers())
+        self.mcp.record_request(self.command, self._rpc, status, self._headers(), _error_message(payload))
         if not self._body_read and self._has_body():
             # The body that wasn't read would be taken as the next request of the connection (which
             # a tunnel shares between clients).

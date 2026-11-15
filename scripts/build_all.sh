@@ -8,8 +8,9 @@ set -euo pipefail
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 "${SCRIPTS_DIR}/setup_sdk.sh"
+# Quick, before the long builds (checks that Go is installed).
+"${SCRIPTS_DIR}/build_cloudflared.sh"
 "${SCRIPTS_DIR}/fetch_blender.sh"
 "${SCRIPTS_DIR}/build_deps.sh"
 "${SCRIPTS_DIR}/build_blender.sh"
-"${SCRIPTS_DIR}/build_cloudflared.sh"
 "${SCRIPTS_DIR}/package_apk.sh"

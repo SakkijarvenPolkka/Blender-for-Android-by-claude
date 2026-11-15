@@ -95,6 +95,7 @@ class Preferences:
     tunnel_token = ""
     tunnel_hostname = ""
     custom_public_url = ""
+    keep_awake = True
 
 
 class AddonTest(unittest.TestCase):
@@ -174,6 +175,9 @@ class AddonTest(unittest.TestCase):
         self.assertEqual(context.window_manager.clipboard,
                          "https://seasonal-deck-organisms-sf.trycloudflare.com/mcp/addon-token")
 
+        # The processor is kept awake while there is a public address.
+        self.assertTrue(self.addon._keep_awake_held)
+
         # A new token keeps the tunnel.
         tunnel = self.addon._tunnel
         self.addon._server.token = "other-token"
@@ -181,6 +185,7 @@ class AddonTest(unittest.TestCase):
         self.addon.stop()
         self.assertIsNone(self.addon._tunnel)
         self.assertEqual(tunnel.state, tunnel.STOPPED)
+        self.assertFalse(self.addon._keep_awake_held)
 
     def test_token_tunnel(self):
         self.preferences.public_access = 'TOKEN'

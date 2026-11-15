@@ -10,6 +10,7 @@ import android.os.Build;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.PersistableBundle;
+import android.os.PowerManager;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.SurfaceHolder;
@@ -79,6 +80,35 @@ public class BlenderActivity extends SDLActivity {
         return true;
     }
 
+    private int keepAwakeCount = 0;
+    private PowerManager.WakeLock wakeLock;
+
+    /**
+     * Keep the processor running while the screen is off (called by Blender, see
+     * `blender_android_keep_awake` in `creator_android.cc`): the MCP server's tunnel would be
+     * disconnected while the device sleeps. Requests are counted.
+     */
+    public void setKeepAwake(boolean enable) {
+        runOnUiThread(() -> {
+            keepAwakeCount = Math.max(0, keepAwakeCount + (enable ? 1 : -1));
+            if (keepAwakeCount > 0) {
+                if (wakeLock == null) {
+                    PowerManager power = getSystemService(PowerManager.class);
+                    if (power == null) {
+                        return;
+                    }
+                    wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "blender:mcp-tunnel");
+                    wakeLock.setReferenceCounted(false);
+                }
+                if (!wakeLock.isHeld()) {
+                    wakeLock.acquire();
+                }
+            } else if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+        });
+    }
+
     private int keepAliveCount = 0;
 
     /**
@@ -110,6 +140,9 @@ public class BlenderActivity extends SDLActivity {
     @Override
     protected void onDestroy() {
         BackgroundService.stop(this);
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+        }
         super.onDestroy();
     }
 

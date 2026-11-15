@@ -57,6 +57,12 @@ CONFIG_RE = re.compile(r'\bconfig=("(?:[^"\\]|\\.)*")')
 RATE_LIMITED_RE = re.compile(r"\bstatus 429\b|Too Many Requests", re.IGNORECASE)
 # Exit code of cloudflared for usage errors (e.g. an invalid tunnel token): not started again.
 USAGE_ERROR_CODE = 255
+# Errors that don't affect the tunnel. On Android, without `/etc/resolv.conf`, cloudflared can't
+# read the system's DNS servers (for features of private networks) nor look up DNS records other
+# than addresses (feature flags, its update check is disabled anyway).
+HARMLESS_ERROR_RE = re.compile(
+    r"Failed to (initialize|refresh) DNS local resolver|Failed to fetch features|"
+    r"Failed to refresh feature selector|update check failed")
 
 # Secrets that may appear in cloudflared's messages (e.g. the URL of a failed request).
 _REDACT = (
@@ -409,6 +415,9 @@ class Tunnel:
         env.pop("TUNNEL_TOKEN", None)
         if self._token:
             env["TUNNEL_TOKEN"] = self._token
+        # DNS servers for features of private networks (not used): otherwise cloudflared reads the
+        # system's every 5 minutes, failing on Android (an error each time).
+        env.setdefault("TUNNEL_DNS_RESOLVER_ADDRS", "1.1.1.1:53,1.0.0.1:53")
         previous_url = self.public_url
         self._set(
             state=Tunnel.STARTING,
@@ -524,7 +533,7 @@ class Tunnel:
                 self._log("MCP tunnel: connected to Cloudflare")
             connected = True
             self._set(error="")
-        if level and level.group(1) in {"ERR", "FTL"}:
+        if level and level.group(1) in {"ERR", "FTL"} and not HARMLESS_ERROR_RE.search(line):
             self._set(error=level.group(2).strip())
         if connected and self.public_url:
             self._set(state=Tunnel.CONNECTED)

@@ -104,19 +104,39 @@ def _timer() -> float | None:
     return TIMER_INTERVAL
 
 
-def _android_keep_alive(enable: bool) -> None:
-    """Keep running while another app is in the foreground (a foreground service on Android)."""
+def _android_call(name: str, enable: bool) -> None:
+    """Call a function of the Android application (`creator_android.cc`)."""
     if sys.platform != "android" or bpy.app.background:
         return
     import ctypes
     try:
         # `ctypes.pythonapi` is `libblender.so` on Android.
-        function = ctypes.pythonapi.blender_android_keep_alive
+        function = getattr(ctypes.pythonapi, name)
     except AttributeError:
         return
     function.argtypes = (ctypes.c_int,)
     function.restype = None
     function(int(enable))
+
+
+def _android_keep_alive(enable: bool) -> None:
+    """Keep running while another app is in the foreground (a foreground service on Android)."""
+    _android_call("blender_android_keep_alive", enable)
+
+
+# Whether the processor is kept awake for the public address (see `_keep_awake`).
+_keep_awake_held = False
+
+
+def _keep_awake(enable: bool) -> None:
+    """
+    Keep the processor running while the screen is off (a wake lock on Android), while the server
+    has a public address: the device would sleep and the tunnel be disconnected.
+    """
+    global _keep_awake_held
+    if enable != _keep_awake_held:
+        _keep_awake_held = enable
+        _android_call("blender_android_keep_awake", enable)
 
 
 def _copy_secret(context: bpy.types.Context, text: str) -> None:
@@ -232,6 +252,7 @@ def stop() -> None:
     global _server, _custom_public_url
     stop_tunnel()
     _custom_public_url = ""
+    _keep_awake(False)
     if _server is None:
         return
     _server.stop()
@@ -358,6 +379,14 @@ class MCP_AddonPreferences(bpy.types.AddonPreferences):
         ),
         default="",
     )
+    keep_awake: BoolProperty(
+        name="Keep Awake",
+        description=(
+            "Keep the processor running while the screen is off and the server has a public address: "
+            "otherwise the device sleeps and Claude can't reach Blender (uses more battery)"
+        ),
+        default=True,
+    )
     custom_public_url: StringProperty(
         name="Public URL",
         description="HTTPS address of your tunnel or reverse proxy to this server (e.g. https://phone.example.ts.net)",
@@ -404,6 +433,12 @@ def custom_public_url(url: str) -> tuple[str, str]:
 
 
 def _start_public_access(preferences: "MCP_AddonPreferences") -> str:
+    error = _start_public_access_impl(preferences)
+    _keep_awake(not error and preferences.public_access != 'NONE' and preferences.keep_awake)
+    return error
+
+
+def _start_public_access_impl(preferences: "MCP_AddonPreferences") -> str:
     global _custom_public_url
     stop_tunnel()
     _custom_public_url = ""
@@ -438,6 +473,8 @@ def _draw_public_access(layout: bpy.types.UILayout, preferences: "MCP_AddonPrefe
         sub.prop(preferences, "custom_public_url")
     if preferences.public_access == 'NONE':
         return
+    if sys.platform == "android":
+        sub.prop(preferences, "keep_awake")
     if preferences.public_access in {'QUICK', 'TOKEN'} and tunnel.find_executable() is None:
         box.label(text="cloudflared isn't available", icon='ERROR')
     if not running:
@@ -472,7 +509,7 @@ def _draw_public_access(layout: bpy.types.UILayout, preferences: "MCP_AddonPrefe
         elif not _tunnel.is_quick and state == tunnel.Tunnel.CONNECTED:
             box.label(text="Set the public host name for the connector URL", icon='INFO')
         if _tunnel.address_changed and ready:
-            box.label(text="New address: edit the connector's URL in Claude", icon='ERROR')
+            box.label(text="New address: edit the connector's URL (or add it again)", icon='ERROR')
         box.operator("mcp.restart_tunnel", icon='FILE_REFRESH')
     elif preferences.public_access in {'QUICK', 'TOKEN'}:
         box.label(text="Tunnel not running", icon='ERROR')
@@ -483,7 +520,7 @@ def _draw_public_access(layout: bpy.types.UILayout, preferences: "MCP_AddonPrefe
     row = box.row()
     row.enabled = ready and bool(connector_url(preferences.token))
     row.operator("mcp.copy_connector_url", icon='COPYDOWN')
-    box.label(text="Claude: Settings > Connectors > Add custom connector")
+    box.label(text="claude.ai: Customize > Connectors > Add custom connector")
 
     # What the connector does (e.g. whether Claude connected), requests from the internet.
     requests = [request for request in _server.recent_requests() if request["proxied"]] if _server else []
@@ -491,9 +528,10 @@ def _draw_public_access(layout: bpy.types.UILayout, preferences: "MCP_AddonPrefe
         col = box.column(align=True)
         col.label(text="Requests from the internet:")
         for request in requests[-RECENT_REQUESTS_SHOWN:]:
-            col.label(text="{:s}  {:s}  {:d}".format(
+            col.label(text="{:s}  {:s}  {:d}{:s}".format(
                 time.strftime("%H:%M:%S", time.localtime(request["time"])),
-                request["rpc"] or request["method"], request["status"]))
+                request["rpc"] or request["method"], request["status"],
+                "  " + request["error"][:60] if request.get("error") else ""))
 
 
 def _draw_settings(layout: bpy.types.UILayout, preferences: MCP_AddonPreferences) -> None:
@@ -591,8 +629,8 @@ class MCP_OT_copy_url_with_token(bpy.types.Operator):
 
 
 class MCP_OT_copy_connector_url(bpy.types.Operator):
-    """Copy the HTTPS URL for a custom connector of the Claude apps (Settings > Connectors > """ \
-        """Add custom connector), it contains the token"""
+    """Copy the HTTPS URL for a custom connector of the Claude apps (claude.ai: Customize > """ \
+        """Connectors > Add custom connector, no sign-in), it contains the token"""
     bl_idname = "mcp.copy_connector_url"
     bl_label = "Copy Connector URL"
 
