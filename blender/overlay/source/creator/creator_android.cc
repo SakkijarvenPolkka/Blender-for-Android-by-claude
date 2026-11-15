@@ -118,6 +118,37 @@ extern "C" JNIEXPORT void blender_android_keep_alive(const int enable)
   env->DeleteLocalRef(activity);
 }
 
+/**
+ * Copy a secret (e.g. a URL with a token) to the clipboard, marked as sensitive: Android doesn't
+ * show it in the clipboard preview and keyboards don't keep it in their clipboard history.
+ * \return Zero when it couldn't be copied (use Blender's clipboard).
+ */
+extern "C" JNIEXPORT int blender_android_copy_sensitive(const char *text)
+{
+  JNIEnv *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  jobject activity = static_cast<jobject>(SDL_GetAndroidActivity());
+  if (env == nullptr || activity == nullptr || text == nullptr) {
+    return 0;
+  }
+  int copied = 0;
+  jclass activity_class = env->GetObjectClass(activity);
+  jmethodID method = env->GetMethodID(activity_class, "copySensitive", "(Ljava/lang/String;)Z");
+  jstring string = env->NewStringUTF(text);
+  if (method != nullptr && string != nullptr) {
+    copied = env->CallBooleanMethod(activity, method, string) ? 1 : 0;
+  }
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+    copied = 0;
+  }
+  if (string != nullptr) {
+    env->DeleteLocalRef(string);
+  }
+  env->DeleteLocalRef(activity_class);
+  env->DeleteLocalRef(activity);
+  return copied;
+}
+
 /** \} */
 
 int main(int argc, char *argv[])

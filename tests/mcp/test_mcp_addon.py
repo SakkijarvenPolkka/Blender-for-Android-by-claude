@@ -7,19 +7,21 @@ Tests of the MCP server add-on's public address handling (Claude app connectors)
 """
 
 import importlib
+import json
 import os
-import stat
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
+import urllib.request
 
 REPO_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ADDONS_DIR = os.path.join(REPO_DIR, "blender", "overlay", "scripts", "addons_core")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from test_mcp_host import FAKE_CLOUDFLARED  # noqa: E402
+from test_mcp_host import write_fake_cloudflared  # noqa: E402
 
 
 def _install_fake_bpy():
@@ -27,7 +29,7 @@ def _install_fake_bpy():
     bpy = types.ModuleType("bpy")
     bpy.types = types.SimpleNamespace(
         AddonPreferences=object, Operator=object, Panel=object,
-        Context=object, UILayout=object, Object=object,
+        Context=object, UILayout=object, Object=object, Image=object,
     )
     bpy.props = types.ModuleType("bpy.props")
     for name in ("BoolProperty", "EnumProperty", "IntProperty", "StringProperty"):
@@ -47,7 +49,14 @@ def _install_fake_bpy():
             self.registered.remove(function)
 
     bpy.app = types.SimpleNamespace(background=False, version_string="5.2.2", timers=Timers())
-    bpy.utils = types.SimpleNamespace(register_class=lambda cls: None, unregister_class=lambda cls: None)
+    def user_resource(resource_type, *, path="", create=False):
+        directory = os.path.join(tempfile.gettempdir(), "blender_user_" + resource_type.lower(), path)
+        if create:
+            os.makedirs(directory, exist_ok=True)
+        return directory
+
+    bpy.utils = types.SimpleNamespace(register_class=lambda cls: None, unregister_class=lambda cls: None,
+                                      user_resource=user_resource)
     bpy.context = types.SimpleNamespace(window_manager=types.SimpleNamespace(windows=[], clipboard=""))
     sys.modules["bpy"] = bpy
     sys.modules["bpy.props"] = bpy.props
@@ -99,9 +108,11 @@ class AddonTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         executable = os.path.join(self.directory.name, "cloudflared")
-        with open(executable, "w") as fh:
-            fh.write(FAKE_CLOUDFLARED.format(python=sys.executable))
-        os.chmod(executable, os.stat(executable).st_mode | stat.S_IEXEC)
+        write_fake_cloudflared(executable)
+        # No requests to the internet: the public address is "checked".
+        check = self.addon.tunnel.check_public_url
+        self.addon.tunnel.check_public_url = lambda url, **kwargs: True
+        self.addCleanup(setattr, self.addon.tunnel, "check_public_url", check)
         environ = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(environ)))
         os.environ["BLENDER_CLOUDFLARED"] = executable
@@ -127,13 +138,13 @@ class AddonTest(unittest.TestCase):
     def test_quick_tunnel(self):
         self.preferences.public_access = 'QUICK'
         self.assertEqual(self.addon._start_from_preferences(self.preferences), "")
-        self.assertTrue(self.addon._tunnel.wait_connected(timeout=20.0))
+        self.assertTrue(self.addon._tunnel.wait_ready(timeout=20.0))
         # Forwards to the server's port.
         self.assertEqual(self.addon._tunnel.local_url, "http://127.0.0.1:{:d}".format(self.addon._server.port))
         self.assertEqual(self.addon.connector_url("addon-token"),
                          "https://seasonal-deck-organisms-sf.trycloudflare.com/mcp/addon-token")
         record = self.draw()
-        self.assertIn(("label", "Connected"), record)
+        self.assertIn(("label", "Ready"), record)
         self.assertIn(("operator", "mcp.copy_connector_url"), record)
         self.assertIn(("label", "seasonal-deck-organisms-sf.trycloudflare.com/mcp/..."), record)
         # The token isn't shown.
@@ -142,6 +153,26 @@ class AddonTest(unittest.TestCase):
         self.assertTrue(self.addon._redraw_needed)
         self.addon._timer()
         self.assertFalse(self.addon._redraw_needed)
+
+        # Requests from the internet are shown (e.g. whether Claude connected).
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode()
+        request = urllib.request.Request(
+            "http://127.0.0.1:{:d}/mcp/addon-token".format(self.addon._server.port), data=body, method="POST",
+            headers={"Content-Type": "application/json", "Cf-Ray": "8d1f-ICN"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            self.assertEqual(response.status, 200)
+        record = self.draw()
+        self.assertIn(("label", "Requests from the internet:"), record)
+        self.assertTrue(any(item[1].endswith("tools/list  200") for item in record), record)
+
+        # Copy the connector URL.
+        operator = self.addon.MCP_OT_copy_connector_url()
+        operator.report = lambda kind, message: None
+        context = types.SimpleNamespace(window_manager=types.SimpleNamespace(clipboard=""))
+        self.addon._preferences = lambda: self.preferences
+        self.assertEqual(operator.execute(context), {'FINISHED'})
+        self.assertEqual(context.window_manager.clipboard,
+                         "https://seasonal-deck-organisms-sf.trycloudflare.com/mcp/addon-token")
 
         # A new token keeps the tunnel.
         tunnel = self.addon._tunnel
@@ -160,7 +191,7 @@ class AddonTest(unittest.TestCase):
         self.preferences.tunnel_hostname = "blender.example.com"
         os.environ["FAKE_MODE"] = "named"
         self.assertEqual(self.addon._start_public_access(self.preferences), "")
-        self.assertTrue(self.addon._tunnel.wait_connected(timeout=20.0))
+        self.assertTrue(self.addon._tunnel.wait_ready(timeout=20.0))
         self.assertEqual(self.addon.connector_url("t"), "https://blender.example.com/mcp/t")
 
     def test_custom_url(self):
@@ -174,15 +205,57 @@ class AddonTest(unittest.TestCase):
         self.addon.stop()
         self.assertEqual(self.addon.connector_url("t"), "")
 
+    def test_custom_url_checks(self):
+        check = self.addon.custom_public_url
+        self.assertEqual(check("https://Phone.example.ts.net/"), ("https://phone.example.ts.net", ""))
+        self.assertEqual(check("https://example.com/blender/mcp"), ("https://example.com/blender", ""))
+        self.assertEqual(check("https://example.com:443"), ("https://example.com", ""))
+        self.assertIn("443", check("https://phone.example.ts.net:8443")[1])
+        self.assertIn("https://", check("http://example.com")[1])
+        self.assertIn("host name", check("https://localhost")[1])
+        self.assertIn("query", check("https://example.com/?token=1")[1])
+        self.assertTrue(check("https://example.com:99999")[1])
+
     def test_failing_tunnel(self):
         self.preferences.public_access = 'QUICK'
         os.environ["FAKE_MODE"] = "fail"
         self.assertEqual(self.addon._start_from_preferences(self.preferences), "")
-        self.assertFalse(self.addon._tunnel.wait_connected(timeout=20.0))
+        self.assertFalse(self.addon._tunnel.wait_ready(timeout=2.0))
         record = self.draw()
-        self.assertIn(("label", "Tunnel stopped"), record)
+        self.assertIn(("label", "Tunnel stopped, starting again soon"), record)
         self.assertTrue(any("failed to request quick Tunnel" in str(item) for item in record), record)
         self.assertEqual(self.addon.connector_url("t"), "")
+
+    def test_executor(self):
+        executor = self.addon.tools.MainThreadExecutor()
+        results = []
+
+        def call(function, timeout):
+            try:
+                results.append(executor(function, timeout))
+            except TimeoutError:
+                results.append("timeout")
+
+        # Runs longer than the timeout once started (e.g. a long render): the result is returned.
+        thread = threading.Thread(target=call, args=(lambda: time.sleep(0.5) or "done", 0.3))
+        thread.start()
+        time.sleep(0.1)
+        executor.process()
+        thread.join(timeout=10.0)
+        self.assertEqual(results, ["done"])
+        # Not started in time: not run anymore.
+        ran = []
+        call(lambda: ran.append(1), 0.1)
+        executor.process()
+        self.assertEqual(results[-1], "timeout")
+        self.assertEqual(ran, [])
+
+    def test_serve_forever_arguments(self):
+        with self.assertRaises(ValueError):
+            self.addon.serve_forever(port=0, token="t", public='TOKEN')
+        with self.assertRaises(ValueError):
+            self.addon.serve_forever(port=0, token="t", public='quick')
+        self.assertIsNone(self.addon._server)
 
     def test_missing_cloudflared(self):
         self.preferences.public_access = 'QUICK'

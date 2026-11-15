@@ -31,6 +31,8 @@ if [ -f "${CLOUDFLARED_OUT_DIR}/libcloudflared.so" ]; then
   cp "${CLOUDFLARED_OUT_DIR}/libcloudflared.so" "${APK_WORK_DIR}/jniLibs/${ANDROID_ABI}/"
   mkdir -p "${APK_WORK_DIR}/assets/licenses"
   cp "${CLOUDFLARED_OUT_DIR}/LICENSE" "${APK_WORK_DIR}/assets/licenses/cloudflared-LICENSE.txt"
+  cp "${CLOUDFLARED_OUT_DIR}/THIRD_PARTY_NOTICES.txt" \
+    "${APK_WORK_DIR}/assets/licenses/cloudflared-THIRD_PARTY_NOTICES.txt"
 elif [ -n "${CI:-}" ]; then
   die "${CLOUDFLARED_OUT_DIR}/libcloudflared.so not found, run scripts/build_cloudflared.sh first"
 else

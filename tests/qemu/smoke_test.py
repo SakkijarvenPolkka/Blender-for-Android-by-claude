@@ -240,6 +240,26 @@ def main():
     check(scene.view_settings.view_transform in {'AgX', 'Standard', 'Filmic', 'Khronos PBR Neutral'},
           "color management: " + scene.view_settings.view_transform)
 
+    # Images of the MCP server's tool results (`mcp_server` add-on): large images are sent as JPEG,
+    # small enough for the Claude apps (tool results of about 150,000 characters).
+    import base64
+    import addon_utils
+    addon_utils.enable("mcp_server")
+    from mcp_server import tools as mcp_tools
+    noise = bpy.data.images.new("noise", 800, 600)
+    noise.pixels.foreach_set(numpy.random.default_rng(1).random(800 * 600 * 4, dtype=numpy.float32))
+    noise_path = os.path.join(output_dir, "noise.png")
+    noise.filepath_raw = noise_path
+    noise.file_format = 'PNG'
+    noise.save()
+    content = mcp_tools._image_content(noise_path, 1024)
+    size = len(base64.b64decode(content["data"]))
+    check(content["mimeType"] == "image/jpeg" and 0 < size <= mcp_tools.MAX_IMAGE_BYTES,
+          "MCP: large image as JPEG ({:d} bytes)".format(size))
+    check(not os.path.exists(os.path.splitext(noise_path)[0] + ".jpg"), "MCP: JPEG file removed")
+    content = mcp_tools._image_content(os.path.join(output_dir, "render.png"), 1024)
+    check(content["mimeType"] == "image/png", "MCP: small image as PNG")
+
     # glTF mesh compression (Draco & meshoptimizer bridge libraries).
     from io_scene_gltf2 import is_draco_available, is_meshopt_available
     check(is_draco_available(), "glTF: Draco library")

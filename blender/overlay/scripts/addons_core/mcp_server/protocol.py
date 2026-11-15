@@ -22,6 +22,7 @@ __all__ = (
 )
 
 import base64
+import collections
 import hmac
 import http.server
 import json
@@ -51,9 +52,14 @@ UNSUPPORTED_PROTOCOL_VERSION = -32022
 
 MAX_REQUEST_SIZE = 16 * 1024 * 1024
 
-# Headers of requests forwarded by a proxy or tunnel (Cloudflare ends requests without a response
-# after 100 seconds): long tool calls continue in the background, see `GET_RESULT_TOOL`.
+# Headers of requests forwarded by a proxy or tunnel. Cloudflare ends requests without a response
+# after 100 to 125 seconds, the Claude apps wait about 60 seconds for a tool: long tool calls
+# continue in the background, see `GET_RESULT_TOOL`.
 PROXY_HEADERS = ("cf-ray", "cdn-loop", "x-forwarded-for", "forwarded", "via")
+# Pages allowed to send requests (the `Origin` header), besides this device: the Claude apps.
+ALLOWED_ORIGIN_DOMAINS = ("claude.ai", "claude.com", "anthropic.com")
+# Requests kept for the interface (method, status, client: no URL, the token may be part of it).
+RECENT_REQUESTS = 20
 GET_RESULT_TOOL = "get_tool_result"
 # Tool calls continuing in the background that are kept (oldest results are dropped).
 MAX_PENDING_CALLS = 32
@@ -150,7 +156,8 @@ class Server:
     MCP server on a background thread.
 
     :arg executor: Runs a function (without arguments) on the main thread and returns its
-       result, arguments: ``(function, timeout)``.
+       result, arguments: ``(function, timeout)``, raises ``TimeoutError`` when the main thread
+       didn't start it in time.
     :arg token: Required from clients, as ``Authorization: Bearer <token>`` header or as the
        last path component of the URL (``/mcp/<token>``, for clients that can't set headers).
     :arg proxy_response_timeout: Seconds a request through a proxy or tunnel waits for a tool,
@@ -204,6 +211,7 @@ class Server:
         # Tool calls continuing in the background: job identifier -> call.
         self._pending: dict[str, _PendingCall] = {}
         self._pending_lock = threading.Lock()
+        self._recent: collections.deque[dict[str, Any]] = collections.deque(maxlen=RECENT_REQUESTS)
         self._httpd: http.server.ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -246,6 +254,23 @@ class Server:
         if not value:
             raise ValueError("A token is required")
         self._token = value
+
+    def recent_requests(self) -> list[dict[str, Any]]:
+        """
+        The last requests, oldest first: ``time`` (seconds since the epoch), ``method`` (HTTP),
+        ``rpc`` (JSON-RPC method, with the tool name), ``status``, ``proxied``, ``client``.
+        """
+        return list(self._recent)
+
+    def record_request(self, method: str, rpc: str, status: int, headers: dict[str, str]) -> None:
+        self._recent.append({
+            "time": time.time(),
+            "method": method,
+            "rpc": rpc,
+            "status": status,
+            "proxied": any(name in headers for name in PROXY_HEADERS),
+            "client": headers.get("user-agent", "")[:80],
+        })
 
     # -------------------------------------------------------------------------
     # Authentication
@@ -507,6 +532,21 @@ def _still_running(name: str, job_id: str, elapsed: float) -> dict[str, Any]:
     }
 
 
+def _describe(message: Any) -> str:
+    """JSON-RPC method of a message (with the tool's name), for the requests log."""
+    if isinstance(message, list):
+        return "batch: " + ", ".join(_describe(item) for item in message[:4])
+    if not isinstance(message, dict):
+        return "?"
+    method = message.get("method")
+    if not isinstance(method, str):
+        return "response" if "result" in message or "error" in message else "?"
+    params = message.get("params")
+    if method == "tools/call" and isinstance(params, dict) and isinstance(params.get("name"), str):
+        return "tools/call " + params["name"][:60]
+    return method[:60]
+
+
 def _error_response(request_id: Any, code: int, message: str, data: Any = None) -> dict[str, Any]:
     error: dict[str, Any] = {"code": code, "message": message}
     if data is not None:
@@ -522,12 +562,31 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
     mcp: Server
     protocol_version = "HTTP/1.1"
     server_version = "BlenderMCP/1.0"
+    # JSON-RPC method of the current request & whether its body was read (see `parse_request`).
+    _rpc = ""
+    _body_read = False
 
     def log_message(self, format: str, *args: Any) -> None:
         # Don't log every request.
         pass
 
+    def parse_request(self) -> bool:
+        # Description of the request for `Server.recent_requests` (one handler serves all requests
+        # of a connection).
+        self._rpc = ""
+        self._body_read = False
+        return super().parse_request()
+
+    def _has_body(self) -> bool:
+        return bool(self.headers.get("Transfer-Encoding")) or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
+
     def _send_json(self, status: int, payload: Any, extra_headers: dict[str, str] | None = None) -> None:
+        self.mcp.record_request(self.command, self._rpc, status, self._headers())
+        if not self._body_read and self._has_body():
+            # The body that wasn't read would be taken as the next request of the connection (which
+            # a tunnel shares between clients).
+            extra_headers = {**(extra_headers or {}), "Connection": "close"}
+            self.close_connection = True
         body = b"" if payload is None else json.dumps(payload).encode("utf-8")
         self.send_response(status)
         if payload is not None:
@@ -541,6 +600,12 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _read_body(self) -> bytes | None:
         """Reads the request body (with a length or chunked), None when it's invalid or too large."""
+        body = self._read_body_data()
+        # A partly read body (too large or invalid) leaves the connection unusable.
+        self._body_read = body is not None
+        return body
+
+    def _read_body_data(self) -> bytes | None:
         if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
             # Sent by some proxies & tunnels.
             chunks = []
@@ -579,14 +644,24 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(401, {"error": "Unauthorized: invalid or missing token"},
                             {"WWW-Authenticate": "Bearer"})
             return False
-        # Protection against DNS rebinding: browsers send the origin of the page.
+        # Protection against DNS rebinding (a page of another site reaching this device's server):
+        # browsers send the origin of the page. Requests through a tunnel come from the internet
+        # (the token is required anyway), the Claude apps may send their own origin.
         origin = self.headers.get("Origin")
-        if origin is not None and origin != "null":
-            host = urllib.parse.urlsplit(origin).hostname or ""
-            if host not in {"localhost", "127.0.0.1", "::1"}:
+        if origin is not None and origin != "null" and not self._is_proxied():
+            host = (urllib.parse.urlsplit(origin).hostname or "").lower()
+            allowed = host in {"localhost", "127.0.0.1", "::1"} or any(
+                host == domain or host.endswith("." + domain) for domain in ALLOWED_ORIGIN_DOMAINS)
+            if not allowed:
                 self._send_json(403, _error_response(None, INVALID_REQUEST, "Forbidden origin"))
                 return False
         return True
+
+    def _is_proxied(self) -> bool:
+        return any(self.headers.get(name) is not None for name in PROXY_HEADERS)
+
+    def _headers(self) -> dict[str, str]:
+        return {key.lower(): value for key, value in self.headers.items()}
 
     def do_GET(self) -> None:
         if not self._check_request():
@@ -625,7 +700,8 @@ class _RequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(400, _error_response(None, PARSE_ERROR, "Parse error"))
             return
 
-        headers = {key.lower(): value for key, value in self.headers.items()}
+        headers = self._headers()
+        self._rpc = _describe(message)
         if isinstance(message, list):
             # JSON-RPC batch (protocol version 2025-03-26).
             responses = []

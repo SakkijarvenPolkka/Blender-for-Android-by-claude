@@ -110,7 +110,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _work/out/cloudflared
-          key: cloudflared-${{ hashFiles('scripts/build_cloudflared.sh', 'scripts/env.sh') }}
+          key: cloudflared-${{ hashFiles('scripts/build_cloudflared.sh', 'scripts/go_module_notices.py', 'scripts/env.sh') }}
 
       - name: cloudflared
         run: ./scripts/build_cloudflared.sh
@@ -120,7 +120,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: _work/out/cloudflared
-          key: cloudflared-${{ hashFiles('scripts/build_cloudflared.sh', 'scripts/env.sh') }}
+          key: cloudflared-${{ hashFiles('scripts/build_cloudflared.sh', 'scripts/go_module_notices.py', 'scripts/env.sh') }}
 
       - name: MCP server tests (host)
         run: |

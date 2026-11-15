@@ -58,10 +58,12 @@ INSTRUCTIONS_ANDROID = """- On Android, optional components are installed after 
 
 
 class _Job:
-    __slots__ = ("function", "done", "result", "error", "cancelled")
+    __slots__ = ("function", "lock", "started", "done", "result", "error", "cancelled")
 
     def __init__(self, function: Callable[[], Any]) -> None:
         self.function = function
+        self.lock = threading.Lock()
+        self.started = threading.Event()
         self.done = threading.Event()
         self.result: Any = None
         self.error: BaseException | None = None
@@ -75,11 +77,21 @@ class MainThreadExecutor:
         self._queue: queue.Queue[_Job] = queue.Queue()
 
     def __call__(self, function: Callable[[], Any], timeout: float) -> Any:
+        """
+        Run the function on the main thread and return its result.
+
+        :arg timeout: Seconds to wait for the main thread to start the function (Blender may be
+           busy or in the background), there is no limit once it runs (e.g. a long render).
+        :raises TimeoutError: The function wasn't started in time (it won't be).
+        """
         job = _Job(function)
         self._queue.put(job)
-        if not job.done.wait(timeout):
-            job.cancelled = True
-            raise TimeoutError()
+        if not job.started.wait(timeout):
+            with job.lock:
+                if not job.started.is_set():
+                    job.cancelled = True
+                    raise TimeoutError()
+        job.done.wait()
         if job.error is not None:
             raise job.error
         return job.result
@@ -92,8 +104,10 @@ class MainThreadExecutor:
             except queue.Empty:
                 return
             timeout = 0.0
-            if job.cancelled:
-                continue
+            with job.lock:
+                if job.cancelled:
+                    continue
+                job.started.set()
             try:
                 job.result = job.function()
             except BaseException as ex:
@@ -114,13 +128,33 @@ def _json(value: Any) -> dict[str, Any]:
     return _text(json.dumps(value, indent=1, default=str))
 
 
+# Images of tool results: the Claude apps accept results up to about 150,000 characters, images are
+# sent in Base64 (a third larger than the file).
+MAX_IMAGE_BYTES = 96 * 1024
+JPEG_QUALITY = 85
+
+
 def _round(values: Any, digits: int = 4) -> list[float]:
     return [round(float(v), digits) for v in values]
 
 
+def _save_jpeg(image: bpy.types.Image, filepath: str) -> None:
+    image.filepath_raw = filepath
+    image.file_format = 'JPEG'
+    try:
+        image.save(quality=JPEG_QUALITY)
+    except TypeError:
+        image.save()
+
+
 def _image_content(filepath: str, max_size: int) -> dict[str, Any]:
-    """PNG image content block, scaled down to ``max_size`` pixels (largest side)."""
+    """
+    Image content block of a PNG file, scaled down to ``max_size`` pixels (largest side). Large
+    images are sent as JPEG (made smaller until they fit `MAX_IMAGE_BYTES`).
+    """
     image = bpy.data.images.load(filepath, check_existing=False)
+    jpeg_path = os.path.splitext(filepath)[0] + ".jpg"
+    path, mime_type = filepath, "image/png"
     try:
         width, height = image.size
         if max_size > 0 and max(width, height) > max_size:
@@ -129,11 +163,27 @@ def _image_content(filepath: str, max_size: int) -> dict[str, Any]:
             image.filepath_raw = filepath
             image.file_format = 'PNG'
             image.save()
+        if os.path.getsize(filepath) > MAX_IMAGE_BYTES:
+            path, mime_type = jpeg_path, "image/jpeg"
+            for _ in range(5):
+                _save_jpeg(image, jpeg_path)
+                size = os.path.getsize(jpeg_path)
+                width, height = image.size
+                if size <= MAX_IMAGE_BYTES or max(width, height) <= 256:
+                    break
+                # The size is roughly proportional to the number of pixels.
+                factor = max(0.5, min(0.9, (MAX_IMAGE_BYTES / size) ** 0.5 * 0.95))
+                image.scale(max(1, round(width * factor)), max(1, round(height * factor)))
     finally:
         bpy.data.images.remove(image)
-    with open(filepath, "rb") as fh:
-        data = base64.b64encode(fh.read()).decode("ascii")
-    return {"type": "image", "data": data, "mimeType": "image/png"}
+    try:
+        with open(path, "rb") as fh:
+            data = base64.b64encode(fh.read()).decode("ascii")
+    finally:
+        if path == jpeg_path:
+            with contextlib.suppress(OSError):
+                os.remove(jpeg_path)
+    return {"type": "image", "data": data, "mimeType": mime_type}
 
 
 def _temp_png() -> str:

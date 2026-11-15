@@ -1,12 +1,15 @@
 package com.github.sakkijarvenpolkka.blender;
 
 import android.Manifest;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.PersistableBundle;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.SurfaceHolder;
@@ -49,6 +52,31 @@ public class BlenderActivity extends SDLActivity {
             mLayout.addView(toolbar, params);
             toolbar.setGravity(Gravity.CENTER);
         }
+    }
+
+    /**
+     * Copy a secret (the MCP server's URL with its token) to the clipboard, marked as sensitive:
+     * not shown in the clipboard preview nor kept in the clipboard history of keyboards (called by
+     * Blender, see `blender_android_copy_sensitive` in `creator_android.cc`).
+     */
+    public boolean copySensitive(String text) {
+        ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+        if (clipboard == null) {
+            return false;
+        }
+        ClipData clip = ClipData.newPlainText("Blender", text);
+        PersistableBundle extras = new PersistableBundle();
+        // `ClipDescription.EXTRA_IS_SENSITIVE` (Android 13), the same key is read by earlier
+        // keyboards.
+        extras.putBoolean("android.content.extra.IS_SENSITIVE", true);
+        clip.getDescription().setExtras(extras);
+        try {
+            clipboard.setPrimaryClip(clip);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Unable to copy to the clipboard", e);
+            return false;
+        }
+        return true;
     }
 
     private int keepAliveCount = 0;

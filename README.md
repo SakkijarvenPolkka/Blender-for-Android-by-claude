@@ -86,9 +86,10 @@ CI에서도 매 빌드마다 실행됩니다.
 - MCP 서버 종단 간 테스트 (`tests/qemu/mcp_test.py`): 최신(2026-07-28)·구버전(2025-06-18) 프로토콜,
   `execute_python`(NumPy로 메시 생성), 씬·오브젝트 정보, Cycles 렌더 이미지 반환, .blend 저장 — **통과**
 - MCP 서버 단위 테스트 (`tests/mcp/test_mcp_host.py`, `test_mcp_addon.py`, 빌드 머신의 Python): 토큰 인증(헤더·URL 경로),
-  터널·프록시를 거친 긴 도구 호출의 백그라운드 실행과 `get_tool_result`, Cloudflare 터널 관리(주소 인식,
-  연결 상태, 오류, 토큰은 환경 변수로) — **통과**. Android용 `cloudflared`는 QEMU에서 실행 확인
-  (`--version`, 실제 터널 연결은 실기기에서)
+  Origin 검사, 읽지 않은 요청 본문의 연결 종료, 터널·프록시를 거친 긴 도구 호출의 백그라운드 실행과
+  `get_tool_result`, Cloudflare 터널 관리(주소 인식, 연결·주소 확인, 다시 시작, 요청 제한, 토큰 가리기, 전용 설정
+  디렉터리, 남은 프로세스 정리), 패널·설정 코드 — **통과**. Android용 `cloudflared`는 QEMU에서 실행 확인
+  (`--version`, 실제 터널 연결은 실기기에서), 큰 이미지의 JPEG 변환은 스모크 테스트에서 확인
 - 추가 구성 요소 (`tests/qemu/smoke_test.py`): 빌드된 USD Python 모듈 패키지를 파일에서 설치한 뒤
   `from pxr import Usd, UsdGeom`으로 스테이지 생성·저장, Blender의 USD 내보내기 결과 읽기 — **통과**
 
@@ -227,33 +228,52 @@ API로 모델링·머티리얼·애니메이션·렌더링을 직접 수행합�
 
 ### Claude 앱 커넥터 (HTTPS)
 
-Claude 앱(모바일·웹·데스크톱)의 **사용자 지정 커넥터**는 Anthropic 서버가 인터넷을 통해 **HTTPS**로만
-접속하므로 `http://127.0.0.1:8765` 같은 주소는 쓸 수 없습니다. Blender for Android에는 Cloudflare Tunnel
+Claude 앱(모바일·웹·데스크톱)의 **사용자 지정 커넥터**는 Anthropic 서버가 인터넷을 통해 **HTTPS(443 포트)**로만
+접속하므로 `http://127.0.0.1:8765`나 휴대폰의 IP 주소는 쓸 수 없습니다. Blender for Android에는 Cloudflare Tunnel
 클라이언트(`cloudflared`)가 들어 있어서, 휴대폰이 Cloudflare로 바깥 연결을 만들고 공개 HTTPS 주소를
 받습니다. 포트 포워딩이나 인증서가 필요 없고 모바일 데이터에서도 동작합니다.
 
 1. MCP 패널의 **Claude App Connector (HTTPS)**에서 방식을 고릅니다.
    - **Quick Tunnel**: 계정 없이 바로 사용할 수 있습니다. 주소(`https://<임의의 단어>.trycloudflare.com`)가
-     서버를 시작할 때마다 바뀌므로 커넥터 URL도 다시 넣어야 합니다.
-   - **Cloudflare Tunnel**: 주소가 고정됩니다 (무료 Cloudflare 계정과 Cloudflare에 연결된 도메인 필요).
-     Cloudflare 대시보드(Zero Trust → Networks → Tunnels)에서 터널을 만들고, Public Hostname
-     (예: `blender.example.com`)의 서비스를 `http://localhost:8765`로 지정합니다. 커넥터 설치 명령의
-     `--token` 뒤의 값을 **Tunnel Token**에, 호스트 이름을 **Public Host Name**에 입력합니다.
-   - **Custom URL**: 직접 운영하는 HTTPS 터널이나 리버스 프록시의 주소 (Tailscale Funnel, ngrok 등).
-2. **Start MCP Server** → "Connected"가 표시되면 **Copy Connector URL**
-   (`https://<주소>/mcp/<토큰>`, 토큰이 들어 있습니다).
-3. Claude 앱: **설정 → 커넥터 → 사용자 지정 커넥터 추가**에 붙여넣습니다 (OAuth 항목은 비워 둡니다).
+     서버를 시작할 때마다 바뀝니다 (Cloudflare의 체험용 서비스, 가동 보장 없음).
+   - **Cloudflare Tunnel**: 주소가 고정됩니다. 무료 Cloudflare 계정과 Cloudflare에 추가된 도메인이 필요합니다.
+     Cloudflare 대시보드(Networking → Tunnels)에서 터널을 만들고, 공개 호스트 이름(예: `blender.example.com`)의
+     서비스를 `http://localhost:8765`로 지정합니다. 커넥터 설치 명령의 `--token` 뒤의 값을 **Tunnel Token**에
+     붙여넣습니다 (호스트 이름은 터널 설정에서 자동으로 읽습니다). 도메인의 보안 설정 중 **AI 봇 차단(Block AI
+     bots)**이나 **Bot Fight Mode**가 Claude의 요청을 막을 수 있으니 끄거나, Anthropic의 IP 범위
+     (`160.79.104.0/21`)를 WAF 건너뛰기 규칙에 추가하세요.
+   - **Custom URL**: 직접 운영하는 HTTPS 터널이나 리버스 프록시의 주소 (443 포트만 가능). 예: TailSocks 앱
+     (F-Droid)의 Tailscale Funnel을 443 포트 → `http://127.0.0.1:8765`로, 또는 Termux에서 실행한 ngrok.
+2. **Start MCP Server** → 패널에 **Ready**가 표시되면 **Copy Connector URL**
+   (`https://<주소>/mcp/<토큰>`, 토큰이 들어 있습니다). Blender가 주소가 실제로 동작하는지(DNS, Cloudflare를 거친
+   연결) 먼저 확인합니다. 너무 일찍 추가하면 Claude가 실패를 1분쯤 기억합니다.
+3. [claude.ai](https://claude.ai)(휴대폰 브라우저도 가능): **설정 → 커넥터 → 사용자 지정 커넥터 추가**에
+   붙여넣습니다 (인증은 "없음", OAuth 항목은 비워 둡니다). 추가한 커넥터는 Android/iOS 앱에서도
+   채팅의 **+ → 커넥터**로 켜서 씁니다.
 
+- 예전에 `http://` 주소로 추가한 커넥터는 동작하지 않으니 삭제하세요. Free 요금제는 사용자 지정 커넥터를
+  하나만 만들 수 있어서, Quick Tunnel의 주소가 바뀌면 새로 추가하지 말고 기존 커넥터의 URL을 수정하세요.
 - URL에 토큰이 들어 있으니 **URL을 가진 사람은 누구나 Blender에서 코드를 실행할 수 있습니다.**
   공유하지 말고, 노출됐다면 **New Token**으로 바꾼 뒤 커넥터 URL을 다시 넣으세요 (터널 주소는 유지됩니다).
-- Cloudflare는 100초 안에 응답이 없는 요청을 끊습니다. 터널이나 프록시를 거친 요청에서 50초 넘게 걸리는
-  도구(긴 렌더링 등)는 Blender에서 계속 실행되고, Claude는 `get_tool_result` 도구로 결과를 받습니다.
-- 서버가 실행되는 동안에만 연결됩니다 (백그라운드에서도 동작). Quick Tunnel은 Cloudflare의 체험용
-  서비스로 가동 보장이 없습니다.
-- `cloudflared`는 Cloudflare의 오픈 소스 프로그램입니다 (Apache License 2.0, APK의 `assets/licenses`).
+  Cloudflare 같은 중계 서비스는 연결 내용을 볼 수 있습니다.
+- Claude 앱은 도구 결과를 60초 정도 기다리고, Cloudflare는 100~125초 안에 응답이 없는 요청을 끊습니다.
+  터널이나 프록시를 거친 요청에서 50초 넘게 걸리는 도구(긴 렌더링 등)는 Blender에서 계속 실행되고,
+  Claude가 `get_tool_result` 도구로 결과를 받습니다. 큰 이미지는 Claude 앱의 결과 크기 제한(약 15만 자)에 맞게
+  JPEG로 줄여서 보냅니다.
+- 서버가 실행되는 동안에만 연결됩니다 (백그라운드에서도 동작). 네트워크가 끊기면 `cloudflared`가 다시
+  연결하고, 끝나 버리면 Blender가 다시 시작합니다 (Quick Tunnel은 이때 주소가 바뀌고 패널에 표시됩니다).
+- 휴대폰에서 나가는 연결: TCP 443(`api.trycloudflare.com`), TCP 853(1.1.1.1 DNS-over-TLS), UDP 또는 TCP 7844
+  (Cloudflare 터널, UDP가 막힌 네트워크에서는 TCP로 전환).
+- 연결이 안 될 때: 패널의 **Requests from the internet** 목록에 Claude의 요청(`initialize`, `tools/list` …)과
+  응답 코드가 표시됩니다. 요청이 전혀 없으면 주소·커넥터 설정 문제, `initialize 200` 뒤에 아무 요청도 없으면
+  Claude 쪽 문제일 수 있습니다. 같은 URL을 PC의 Claude Code로 확인할 수 있습니다:
+  `claude mcp add --transport http blender https://<주소>/mcp/<토큰>`.
+- `cloudflared`는 Cloudflare의 오픈 소스 프로그램입니다 (Apache License 2.0). 라이선스와 포함된 Go 모듈의
+  고지는 APK의 `assets/licenses`에 있습니다. 자동 업데이트는 꺼져 있고 APK와 함께 업데이트됩니다.
 
 PC나 서버의 Blender에서는 `cloudflared`가 `PATH`에 있으면 같은 기능을 쓸 수 있습니다
-(백그라운드 모드: `mcp_server.serve_forever(port=8765, public='QUICK')`).
+(백그라운드 모드: `mcp_server.serve_forever(port=8765, public='QUICK')`, 고정 주소는
+`public='TOKEN'`과 `TUNNEL_TOKEN` 환경 변수).
 
 제공 도구: `execute_python`(bpy·mathutils·NumPy, 변수 유지), `get_scene_info`, `get_object_info`,
 `get_viewport_screenshot`(뷰포트 화면 이미지), `render_image`(렌더 결과 이미지), `save_blend_file`,
