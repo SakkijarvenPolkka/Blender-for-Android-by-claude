@@ -60,7 +60,7 @@ installed after the APK. See "Build" below. This project was made purely with Cl
 | Cycles OSL(Open Shading Language, LLVM JIT) — 스크립트 노드, OSL 셰이딩 시스템 | ✅ QEMU에서 확인 |
 | APK 설치 후 추가 설치: USD Python 모듈(`pxr`) 구성 요소, pip로 Python 패키지 설치 | ✅ QEMU에서 확인 |
 | APK 패키징 (Gradle, 데이터 자동 설치, 터치 툴바) | ✅ 약 230MB APK 생성 확인 |
-| 실제 기기(Galaxy S22)에서 UI 실행 (SDL3 창, Vulkan, 터치 입력) | ⚠️ **실기기 테스트 전** — GPU 드라이버 호환성은 기기에서 확인 필요 |
+| 실제 기기에서 UI 실행 (SDL3 창, Vulkan, 터치 입력) | ⚠️ 사용자 기기에서 Vulkan으로 실행 보고됨 — 기기별 GPU 드라이버 호환성은 계속 확인 필요 |
 
 ### 검증
 
@@ -92,6 +92,8 @@ CI에서도 매 빌드마다 실행됩니다.
   (`--version`, 실제 터널 연결은 실기기에서), 큰 이미지의 JPEG 변환은 스모크 테스트에서 확인
 - 추가 구성 요소 (`tests/qemu/smoke_test.py`): 빌드된 USD Python 모듈 패키지를 파일에서 설치한 뒤
   `from pxr import Usd, UsdGeom`으로 스테이지 생성·저장, Blender의 USD 내보내기 결과 읽기 — **통과**
+- GPU 백엔드 설정: 기본 설정과, OpenGL이 저장된 설정 파일(빌드 24 이하·데스크톱 Blender, 저장된 `userpref.blend`를
+  `tests/qemu/userpref_gpu_backend.py`로 바꿔 재현)을 불러올 때 모두 Vulkan인지 확인
 
 GPU(Vulkan) 경로와 터치·펜 입력은 에뮬레이션으로 확인할 수 없어 실기기 테스트가 필요합니다.
 
@@ -395,7 +397,9 @@ scripts/                     빌드 스크립트
   DeX 마우스(포인터 캡처), 가상 키보드 단축키 입력, 한글 등 IME 조합 입력을 처리합니다.
 - **Vulkan** (`GHOST_ContextVK.cc`): `VK_KHR_android_surface`, 앱 일시정지/재개 시 Surface 재생성,
   화면 회전(preTransform) 처리, 모바일 GPU에 없는 기능(예: Qualcomm 드라이버의 `VK_EXT_provoking_vertex`)을
-  필수에서 선택으로 완화했습니다.
+  필수에서 선택으로 완화했습니다. 환경설정의 GPU 백엔드 기본값도 Vulkan이며, OpenGL이 저장된 이전 설정은 불러올 때
+  Vulkan으로 바뀝니다(데스크톱 기본값인 OpenGL을 먼저 시도하면 OpenGL이 없는 이 빌드에서는 실패로 처리되어, 실제로는
+  Vulkan으로 동작하면서도 시작할 때마다 "Failed to load using Vulkan, using OpenGL instead" 경고가 떴습니다 — 빌드 24까지).
 - **Python**: 표준 라이브러리 확장 모듈은 `libpython3.13.a`에 정적으로 포함하고(`MODULE_BUILDTYPE=static`) Python
   전체를 `libblender.so`에 링크합니다. NumPy 같은 패키지의 확장 모듈은 CPython의 Android 빌드처럼 공유 라이브러리로
   데이터와 함께 풀리며, Python API를 제공하는 `libblender.so`에 의존하도록 빌드합니다(`deps/cmake/cross_python.cmake`).

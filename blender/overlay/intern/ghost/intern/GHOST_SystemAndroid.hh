@@ -67,6 +67,18 @@ class GHOST_SystemAndroid : public GHOST_System {
   GHOST_IContext *createOffscreenContext(GHOST_GPUSettings gpu_settings) override;
   GHOST_TSuccess disposeContext(GHOST_IContext *context) override;
 
+  /**
+   * Native dialog, for messages Blender can't draw itself: "Platform Unsupported" when the
+   * device's Vulkan driver doesn't meet Blender's requirements (there is no GPU back-end, Blender
+   * closes after the message instead of quitting without explanation).
+   */
+  GHOST_TSuccess showMessageBox(const char *title,
+                                const char *message,
+                                const char *help_label,
+                                const char *continue_label,
+                                const char *link,
+                                GHOST_DialogOptions dialog_options) const override;
+
   void addDirtyWindow(GHOST_WindowAndroid *window);
   void setRelativeMouseMode(bool relative);
 

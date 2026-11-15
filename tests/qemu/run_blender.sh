@@ -62,6 +62,35 @@ run_blender --background --factory-startup -noaudio \
 grep -q "ALL TESTS PASSED" "${TEST_DIR}/smoke_test.log" || die "Smoke test failed"
 log "Smoke test passed, output in ${TEST_DIR}/output"
 
+# GPU back-end preference: Vulkan, the only back-end of the build. Otherwise Blender tries the
+# preferred back-end first and reports "Failed to load using Vulkan, using OpenGL instead" at every
+# start (OpenGL: the default of desktop Blender, stored in the preferences by builds up to 24).
+log "GPU back-end preference"
+PREFS_DIR="${TEST_DIR}/prefs"
+rm -rf "${PREFS_DIR}"
+mkdir -p "${PREFS_DIR}"
+GPU_BACKEND_CHECK="import bpy, sys
+value = bpy.context.preferences.system.gpu_backend
+print('gpu_backend preference:', repr(value), flush=True)
+if value == 'VULKAN' and '--save' in sys.argv:
+    bpy.ops.wm.save_userpref()
+print('GPU BACKEND ' + ('OK' if value == 'VULKAN' else 'WRONG'), flush=True)"
+# Factory settings (saved, to be loaded below).
+( export BLENDER_USER_RESOURCES="${PREFS_DIR}"
+  run_blender --background --factory-startup -noaudio --python-expr "${GPU_BACKEND_CHECK}" -- --save ) \
+  > "${TEST_DIR}/gpu_backend_factory.log" 2>&1 || true
+grep -q "GPU BACKEND OK" "${TEST_DIR}/gpu_backend_factory.log" \
+  || { cat "${TEST_DIR}/gpu_backend_factory.log"; die "Factory settings: the GPU back-end isn't Vulkan"; }
+# Saved preferences selecting OpenGL are loaded with Vulkan.
+"${PYTHON:-python3}" -I "${REPO_DIR}/tests/qemu/userpref_gpu_backend.py" "${PREFS_DIR}/config/userpref.blend" 1 \
+  || die "Unable to change the GPU back-end of the saved preferences"
+( export BLENDER_USER_RESOURCES="${PREFS_DIR}"
+  run_blender --background -noaudio --python-expr "${GPU_BACKEND_CHECK}" ) \
+  > "${TEST_DIR}/gpu_backend_saved.log" 2>&1 || true
+grep -q "GPU BACKEND OK" "${TEST_DIR}/gpu_backend_saved.log" && ! grep -q "matches no enum" "${TEST_DIR}/gpu_backend_saved.log" \
+  || { cat "${TEST_DIR}/gpu_backend_saved.log"; die "Preferences saved with OpenGL: the GPU back-end isn't Vulkan"; }
+log "GPU back-end preference: Vulkan (factory settings, preferences saved with OpenGL)"
+
 # Python interpreter executable (`sys.executable`), packaged like in the APK.
 log "Python executable (isolated mode, as used by the extensions platform)"
 PYTHON_EXE="${TEST_DIR}/libblender_python.so"

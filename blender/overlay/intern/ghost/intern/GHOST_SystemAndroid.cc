@@ -413,6 +413,47 @@ void GHOST_SystemAndroid::putClipboard(const char *buffer, bool selection) const
   }
 }
 
+GHOST_TSuccess GHOST_SystemAndroid::showMessageBox(const char *title,
+                                                   const char *message,
+                                                   const char *help_label,
+                                                   const char *continue_label,
+                                                   const char *link,
+                                                   GHOST_DialogOptions dialog_options) const
+{
+  enum { BUTTON_CONTINUE = 0, BUTTON_HELP = 1 };
+  const bool has_link = link && link[0] && help_label && help_label[0];
+  SDL_MessageBoxButtonData buttons[2] = {};
+  int buttons_num = 0;
+  if (has_link) {
+    buttons[buttons_num++] = {0, BUTTON_HELP, help_label};
+  }
+  buttons[buttons_num++] = {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT |
+                                SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT,
+                            BUTTON_CONTINUE,
+                            (continue_label && continue_label[0]) ? continue_label : "OK"};
+
+  SDL_MessageBoxData data = {};
+  data.flags = (dialog_options & GHOST_DialogError)   ? SDL_MESSAGEBOX_ERROR :
+               (dialog_options & GHOST_DialogWarning) ? SDL_MESSAGEBOX_WARNING :
+                                                        SDL_MESSAGEBOX_INFORMATION;
+  data.window = window_ ? window_->getSDLWindow() : nullptr;
+  data.title = title ? title : "Blender";
+  data.message = message ? message : "";
+  data.numbuttons = buttons_num;
+  data.buttons = buttons;
+
+  /* Blocks until the dialog (shown by the activity's UI thread) is closed. */
+  int button_id = BUTTON_CONTINUE;
+  if (!SDL_ShowMessageBox(&data, &button_id)) {
+    CLOG_WARN(&LOG, "Unable to show the message \"%s\": %s", data.title, SDL_GetError());
+    return GHOST_kFailure;
+  }
+  if (has_link && button_id == BUTTON_HELP) {
+    SDL_OpenURL(link);
+  }
+  return GHOST_kSuccess;
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
