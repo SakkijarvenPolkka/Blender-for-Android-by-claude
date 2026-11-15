@@ -25,6 +25,18 @@ log "Building the Python interpreter executable"
   "${REPO_DIR}/android/native/blender_python.c" -I"${LIBDIR}/include/python3.13" \
   -L"${APK_WORK_DIR}/jniLibs/${ANDROID_ABI}" -lblender '-Wl,-rpath,$ORIGIN'
 
+# Cloudflare Tunnel client for the MCP server's public HTTPS address (`scripts/build_cloudflared.sh`).
+CLOUDFLARED_OUT_DIR="${CLOUDFLARED_OUT_DIR:-${WORK_DIR}/out/cloudflared}"
+if [ -f "${CLOUDFLARED_OUT_DIR}/libcloudflared.so" ]; then
+  cp "${CLOUDFLARED_OUT_DIR}/libcloudflared.so" "${APK_WORK_DIR}/jniLibs/${ANDROID_ABI}/"
+  mkdir -p "${APK_WORK_DIR}/assets/licenses"
+  cp "${CLOUDFLARED_OUT_DIR}/LICENSE" "${APK_WORK_DIR}/assets/licenses/cloudflared-LICENSE.txt"
+elif [ -n "${CI:-}" ]; then
+  die "${CLOUDFLARED_OUT_DIR}/libcloudflared.so not found, run scripts/build_cloudflared.sh first"
+else
+  log "warning: cloudflared not built (scripts/build_cloudflared.sh), no public HTTPS address for the MCP server"
+fi
+
 log "Creating data archive"
 "${PYTHON:-python3}" - "${BLENDER_INSTALL_DIR}" "${BLENDER_VERSION_SHORT}" \
   "${APK_WORK_DIR}/assets/blender_data.zip" <<'EOF'

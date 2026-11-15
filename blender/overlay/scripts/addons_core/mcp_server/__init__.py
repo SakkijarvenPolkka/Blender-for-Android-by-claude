@@ -9,6 +9,9 @@ through the Model Context Protocol.
 Background mode (e.g. on a server)::
 
    blender --background --python-expr "import mcp_server; mcp_server.serve_forever(port=8765)"
+
+Custom connectors of the Claude apps need a public HTTPS address: the server can start a Cloudflare
+tunnel (``cloudflared``, bundled with Blender for Android), see :mod:`mcp_server.tunnel`.
 """
 
 bl_info = {
@@ -22,30 +25,72 @@ bl_info = {
     "support": "COMMUNITY",
 }
 
+import atexit
 import os
 import secrets
 import socket
 import sys
+import tempfile
 
 import bpy
-from bpy.props import BoolProperty, IntProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 
-from . import protocol, tools
+from . import protocol, tools, tunnel
 
 _server: protocol.Server | None = None
+_tunnel: tunnel.Tunnel | None = None
+# The public address of a custom tunnel / reverse proxy (`https://host`).
+_custom_public_url = ""
 _executor = tools.MainThreadExecutor()
 # Seconds between checks for requests on the main thread.
 TIMER_INTERVAL = 0.05
+# Set from the tunnel's thread, the interface is redrawn on the main thread.
+_redraw_needed = False
+
+PUBLIC_ACCESS_ITEMS = (
+    ('NONE', "Off",
+     "No public address: only clients on this device (or on the local network)"),
+    ('QUICK', "Quick Tunnel",
+     "Public HTTPS address from Cloudflare (trycloudflare.com), no account needed. "
+     "The address changes every time the server starts"),
+    ('TOKEN', "Cloudflare Tunnel",
+     "Fixed public HTTPS address: a tunnel of your Cloudflare account (free) with a public host name "
+     "of your domain routed to http://localhost:<port>, connected with its token"),
+    ('CUSTOM', "Custom URL",
+     "Your own HTTPS tunnel or reverse proxy to this device (e.g. Tailscale Funnel, ngrok)"),
+)
 
 
 def _log(message: str) -> None:
     print(message)
 
 
+def _tag_redraw() -> None:
+    global _redraw_needed
+    _redraw_needed = True
+
+
+def _redraw() -> None:
+    global _redraw_needed
+    _redraw_needed = False
+    window_manager = bpy.context.window_manager
+    if window_manager is None:
+        return
+    for window in window_manager.windows:
+        screen = window.screen
+        if screen is None:
+            continue
+        for area in screen.areas:
+            if area.type in {'VIEW_3D', 'PREFERENCES'}:
+                area.tag_redraw()
+
+
 def _timer() -> float | None:
     if _server is None:
         return None
     _executor.process()
+    if _redraw_needed:
+        _redraw()
     return TIMER_INTERVAL
 
 
@@ -77,6 +122,61 @@ def local_addresses() -> list[str]:
     return addresses
 
 
+def _tunnel_home() -> str:
+    """cloudflared's files (no configuration of another cloudflared on the system)."""
+    return os.path.join(tempfile.gettempdir(), "blender_mcp_cloudflared")
+
+
+def start_tunnel(*, token: str = "", hostname: str = "") -> tunnel.Tunnel:
+    """
+    Start a Cloudflare tunnel to the running server: a quick tunnel without ``token``.
+
+    :raises RuntimeError: cloudflared isn't available or the server isn't running.
+    """
+    global _tunnel
+    stop_tunnel()
+    if _server is None:
+        raise RuntimeError("The MCP server isn't running")
+    executable = tunnel.find_executable()
+    if executable is None:
+        raise RuntimeError("cloudflared isn't available (it's included in Blender for Android, "
+                           "otherwise install it from Cloudflare)")
+    instance = tunnel.Tunnel(
+        executable=executable,
+        local_url="http://127.0.0.1:{:d}".format(_server.port),
+        token=token,
+        hostname=hostname,
+        home=_tunnel_home(),
+        log=_log,
+        on_change=_tag_redraw,
+    )
+    instance.start()
+    _tunnel = instance
+    return instance
+
+
+def stop_tunnel() -> None:
+    global _tunnel
+    if _tunnel is None:
+        return
+    _tunnel.stop()
+    _tunnel = None
+    _tag_redraw()
+
+
+def public_url() -> str:
+    """Public address of the server (``https://host``), empty when there is none (yet)."""
+    if _tunnel is not None:
+        return _tunnel.public_url
+    return _custom_public_url
+
+
+def connector_url(token: str) -> str:
+    """URL for custom connectors of the Claude apps (the token in the path), empty without address."""
+    origin = public_url()
+    return "{:s}/mcp/{:s}".format(origin, token) if origin else ""
+
+
 def start(*, port: int, token: str, allow_network: bool) -> protocol.Server:
     global _server
     stop()
@@ -100,7 +200,9 @@ def start(*, port: int, token: str, allow_network: bool) -> protocol.Server:
 
 
 def stop() -> None:
-    global _server
+    global _server, _custom_public_url
+    stop_tunnel()
+    _custom_public_url = ""
     if _server is None:
         return
     _server.stop()
@@ -111,19 +213,39 @@ def stop() -> None:
     _log("MCP server stopped")
 
 
-def serve_forever(*, port: int = 8765, token: str | None = None, allow_network: bool = False) -> None:
+def serve_forever(
+        *,
+        port: int = 8765,
+        token: str | None = None,
+        allow_network: bool = False,
+        public: str = 'NONE',
+        tunnel_token: str | None = None,
+        tunnel_hostname: str = "",
+) -> None:
     """
     Serve requests until interrupted, for background mode (``--background``) where there is no
     event loop to run requests on the main thread.
 
     :arg token: From the ``BLENDER_MCP_TOKEN`` environment variable when not given, a random
        token is generated & printed otherwise.
+    :arg public: Public HTTPS address: ``'QUICK'`` (Cloudflare quick tunnel) or ``'TOKEN'``
+       (Cloudflare tunnel, ``tunnel_token`` or the ``TUNNEL_TOKEN`` environment variable).
     """
     token = token or os.environ.get("BLENDER_MCP_TOKEN") or secrets.token_urlsafe(24)
     server = start(port=port, token=token, allow_network=allow_network)
     if not os.environ.get("BLENDER_MCP_TOKEN"):
         print("MCP token:", token)
     print("MCP end-point: http://{:s}:{:d}/mcp".format(server.host, server.port), flush=True)
+    if public in {'QUICK', 'TOKEN'}:
+        instance = start_tunnel(
+            token=(tunnel_token or os.environ.get("TUNNEL_TOKEN", "")) if public == 'TOKEN' else "",
+            hostname=tunnel_hostname,
+        )
+        if instance.wait_connected(timeout=60.0) and instance.public_url:
+            print("MCP public end-point: {:s}/mcp (Claude connector: {:s}/mcp/<token>)".format(
+                instance.public_url, instance.public_url), flush=True)
+        else:
+            print("MCP tunnel: not connected:", instance.error or instance.state, flush=True)
     try:
         while _server is not None:
             _executor.process(timeout=0.25)
@@ -176,9 +298,121 @@ class MCP_AddonPreferences(bpy.types.AddonPreferences):
         description="Start the server when Blender starts",
         default=False,
     )
+    public_access: EnumProperty(
+        name="Public Address",
+        description=(
+            "Public HTTPS address of the server, needed by custom connectors of the Claude apps "
+            "(they connect from the internet)"
+        ),
+        items=PUBLIC_ACCESS_ITEMS,
+        default='NONE',
+    )
+    tunnel_token: StringProperty(
+        name="Tunnel Token",
+        description=(
+            "Token of your Cloudflare tunnel (Cloudflare dashboard: Networks > Tunnels > the tunnel > "
+            "install connector, the long value after \"--token\")"
+        ),
+        subtype='PASSWORD',
+        default="",
+    )
+    tunnel_hostname: StringProperty(
+        name="Public Host Name",
+        description=(
+            "Public host name of the tunnel (e.g. blender.example.com), routed to "
+            "http://localhost:<port> in the Cloudflare dashboard"
+        ),
+        default="",
+    )
+    custom_public_url: StringProperty(
+        name="Public URL",
+        description="HTTPS address of your tunnel or reverse proxy to this server (e.g. https://phone.example.ts.net)",
+        default="",
+    )
 
     def draw(self, context: bpy.types.Context) -> None:
         _draw_settings(self.layout, self)
+
+
+def _start_from_preferences(preferences: "MCP_AddonPreferences") -> str:
+    """Start the server (and its public address) with the preferences, an error message on failure."""
+    if not preferences.token:
+        preferences.token = secrets.token_urlsafe(24)
+    try:
+        start(port=preferences.port, token=preferences.token, allow_network=preferences.allow_network)
+    except OSError as ex:
+        return "Unable to start the MCP server: {!s}".format(ex)
+    return _start_public_access(preferences)
+
+
+def _start_public_access(preferences: "MCP_AddonPreferences") -> str:
+    global _custom_public_url
+    stop_tunnel()
+    _custom_public_url = ""
+    if preferences.public_access == 'CUSTOM':
+        url = preferences.custom_public_url.strip().rstrip("/")
+        if url.endswith("/mcp"):
+            url = url[:-4]
+        if not url.startswith("https://"):
+            return "The public URL must start with https://"
+        _custom_public_url = url
+    elif preferences.public_access in {'QUICK', 'TOKEN'}:
+        if preferences.public_access == 'TOKEN' and not preferences.tunnel_token.strip():
+            return "Paste the token of your Cloudflare tunnel first"
+        try:
+            start_tunnel(
+                token=preferences.tunnel_token.strip() if preferences.public_access == 'TOKEN' else "",
+                hostname=preferences.tunnel_hostname if preferences.public_access == 'TOKEN' else "",
+            )
+        except (OSError, RuntimeError) as ex:
+            return "Unable to start the tunnel: {!s}".format(ex)
+    return ""
+
+
+def _draw_public_access(layout: bpy.types.UILayout, preferences: "MCP_AddonPreferences", running: bool) -> None:
+    box = layout.box()
+    box.label(text="Claude App Connector (HTTPS)", icon='WORLD')
+    sub = box.column()
+    sub.enabled = not running
+    sub.prop(preferences, "public_access", text="")
+    if preferences.public_access == 'TOKEN':
+        sub.prop(preferences, "tunnel_token")
+        sub.prop(preferences, "tunnel_hostname")
+    elif preferences.public_access == 'CUSTOM':
+        sub.prop(preferences, "custom_public_url")
+    if preferences.public_access == 'NONE':
+        return
+    if preferences.public_access in {'QUICK', 'TOKEN'} and tunnel.find_executable() is None:
+        box.label(text="cloudflared isn't available", icon='ERROR')
+    if not running:
+        if preferences.public_access == 'QUICK':
+            box.label(text="A new address every start (update the connector)", icon='INFO')
+        return
+
+    if _tunnel is not None:
+        state = _tunnel.state
+        if state == tunnel.Tunnel.CONNECTED:
+            box.label(text="Connected", icon='CHECKMARK')
+        elif state == tunnel.Tunnel.STARTING:
+            box.label(text="Connecting to Cloudflare...", icon='SORTTIME')
+        else:
+            box.label(text="Tunnel stopped", icon='ERROR')
+        if _tunnel.error and state != tunnel.Tunnel.CONNECTED:
+            box.label(text=_tunnel.error[:120])
+        if _tunnel.public_url:
+            box.label(text=_tunnel.public_url.removeprefix("https://") + "/mcp/...")
+        elif not _tunnel.is_quick:
+            box.label(text="Set the public host name for the connector URL", icon='INFO')
+        box.operator("mcp.restart_tunnel", icon='FILE_REFRESH')
+    elif preferences.public_access in {'QUICK', 'TOKEN'}:
+        box.label(text="Tunnel not running", icon='ERROR')
+        box.operator("mcp.restart_tunnel", icon='PLAY')
+    elif _custom_public_url:
+        box.label(text=_custom_public_url.removeprefix("https://") + "/mcp/...")
+    row = box.row()
+    row.enabled = bool(connector_url(preferences.token))
+    row.operator("mcp.copy_connector_url", icon='COPYDOWN')
+    box.label(text="Claude: Settings > Connectors > Add custom connector")
 
 
 def _draw_settings(layout: bpy.types.UILayout, preferences: MCP_AddonPreferences) -> None:
@@ -197,6 +431,8 @@ def _draw_settings(layout: bpy.types.UILayout, preferences: MCP_AddonPreferences
     sub.prop(preferences, "allow_network")
     col.prop(preferences, "auto_start")
 
+    _draw_public_access(col, preferences, running)
+
     if running:
         box = col.box()
         for url in _endpoint_urls(preferences):
@@ -213,14 +449,10 @@ class MCP_OT_start(bpy.types.Operator):
     bl_label = "Start MCP Server"
 
     def execute(self, context: bpy.types.Context) -> set[str]:
-        preferences = _preferences()
-        if not preferences.token:
-            preferences.token = secrets.token_urlsafe(24)
-        try:
-            start(port=preferences.port, token=preferences.token, allow_network=preferences.allow_network)
-        except OSError as ex:
-            self.report({'ERROR'}, "Unable to start the MCP server: {!s}".format(ex))
-            return {'CANCELLED'}
+        error = _start_from_preferences(_preferences())
+        if error:
+            self.report({'ERROR'}, error)
+            return {'CANCELLED'} if _server is None else {'FINISHED'}
         return {'FINISHED'}
 
 
@@ -243,7 +475,8 @@ class MCP_OT_new_token(bpy.types.Operator):
         preferences = _preferences()
         preferences.token = secrets.token_urlsafe(24)
         if _server is not None:
-            start(port=preferences.port, token=preferences.token, allow_network=preferences.allow_network)
+            # The tunnel (and its address) is kept.
+            _server.token = preferences.token
         return {'FINISHED'}
 
 
@@ -276,6 +509,39 @@ class MCP_OT_copy_url_with_token(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class MCP_OT_copy_connector_url(bpy.types.Operator):
+    """Copy the HTTPS URL for a custom connector of the Claude apps (Settings > Connectors > """ \
+        """Add custom connector), it contains the token"""
+    bl_idname = "mcp.copy_connector_url"
+    bl_label = "Copy Connector URL"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _server is not None and bool(public_url())
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        context.window_manager.clipboard = connector_url(_preferences().token)
+        self.report({'INFO'}, "Copied to the clipboard")
+        return {'FINISHED'}
+
+
+class MCP_OT_restart_tunnel(bpy.types.Operator):
+    """Start the tunnel again (a quick tunnel gets a new address)"""
+    bl_idname = "mcp.restart_tunnel"
+    bl_label = "Restart Tunnel"
+
+    @classmethod
+    def poll(cls, context: bpy.types.Context) -> bool:
+        return _server is not None
+
+    def execute(self, context: bpy.types.Context) -> set[str]:
+        error = _start_public_access(_preferences())
+        if error:
+            self.report({'ERROR'}, error)
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
 class VIEW3D_PT_mcp_server(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -293,6 +559,8 @@ classes = (
     MCP_OT_new_token,
     MCP_OT_copy_claude_code_command,
     MCP_OT_copy_url_with_token,
+    MCP_OT_copy_connector_url,
+    MCP_OT_restart_tunnel,
     VIEW3D_PT_mcp_server,
 )
 
@@ -300,10 +568,9 @@ classes = (
 def _auto_start() -> None:
     preferences = _preferences()
     if preferences.auto_start and preferences.token and _server is None:
-        try:
-            start(port=preferences.port, token=preferences.token, allow_network=preferences.allow_network)
-        except OSError as ex:
-            _log("MCP server: unable to start: {!s}".format(ex))
+        error = _start_from_preferences(preferences)
+        if error:
+            _log("MCP server: {:s}".format(error))
     return None
 
 
@@ -312,9 +579,12 @@ def register() -> None:
         bpy.utils.register_class(cls)
     if not bpy.app.background:
         bpy.app.timers.register(_auto_start, first_interval=1.0)
+    # The tunnel is a separate process.
+    atexit.register(stop_tunnel)
 
 
 def unregister() -> None:
     stop()
+    atexit.unregister(stop_tunnel)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

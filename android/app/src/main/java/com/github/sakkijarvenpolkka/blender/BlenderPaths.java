@@ -82,6 +82,11 @@ final class BlenderPaths {
         if (python.isFile()) {
             setenv("BLENDER_ANDROID_PYTHON", python.getAbsolutePath());
         }
+        // Cloudflare Tunnel client: public HTTPS address of the MCP server (`mcp_server` add-on).
+        File cloudflared = new File(nativeLibDir, "libcloudflared.so");
+        if (cloudflared.isFile()) {
+            setenv("BLENDER_ANDROID_CLOUDFLARED", cloudflared.getAbsolutePath());
+        }
         // Libraries of executed programs (the Python interpreter links `libblender.so`).
         setenv("LD_LIBRARY_PATH", nativeLibDir);
 

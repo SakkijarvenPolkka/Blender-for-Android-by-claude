@@ -73,6 +73,15 @@ LD_LIBRARY_PATH="$(dirname "${LIB}")" "${QEMU_AARCH64}" -L "${ANDROID_ROOT}" "${
 print('python', sys.version.split()[0], ssl.OPENSSL_VERSION, 'numpy', numpy.__version__)" \
   || die "Python executable test failed"
 
+# Cloudflare Tunnel client packaged in the APK (`scripts/build_cloudflared.sh`): it runs on bionic.
+# (Only its version: a tunnel would make the build machine reachable from the internet.)
+CLOUDFLARED="${CLOUDFLARED_OUT_DIR:-${WORK_DIR}/out/cloudflared}/libcloudflared.so"
+if [ -f "${CLOUDFLARED}" ]; then
+  log "cloudflared"
+  "${QEMU_AARCH64}" -L "${ANDROID_ROOT}" "${CLOUDFLARED}" --version | tee "${TEST_DIR}/cloudflared.log"
+  grep -q "cloudflared version" "${TEST_DIR}/cloudflared.log" || die "cloudflared test failed"
+fi
+
 # MCP server (`mcp_server` add-on): Blender serves in the background, the test acts as client.
 log "MCP server"
 MCP_PORT="${MCP_PORT:-18765}"

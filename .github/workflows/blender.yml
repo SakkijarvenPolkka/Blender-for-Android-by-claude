@@ -99,6 +99,34 @@ jobs:
       - name: Blender source
         run: ./scripts/fetch_blender.sh
 
+      # Cloudflare Tunnel client (public HTTPS address of the MCP server), packaged in the APK.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Restore cloudflared
+        id: cloudflared-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: _work/out/cloudflared
+          key: cloudflared-${{ hashFiles('scripts/build_cloudflared.sh', 'scripts/env.sh') }}
+
+      - name: cloudflared
+        run: ./scripts/build_cloudflared.sh
+
+      - name: Save cloudflared
+        if: steps.cloudflared-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _work/out/cloudflared
+          key: cloudflared-${{ hashFiles('scripts/build_cloudflared.sh', 'scripts/env.sh') }}
+
+      - name: MCP server tests (host)
+        run: |
+          python3 tests/mcp/test_mcp_host.py
+          python3 tests/mcp/test_mcp_addon.py
+
       - name: Dependencies
         # Only checks that the cached dependencies are up to date.
         run: ./scripts/build_deps.sh

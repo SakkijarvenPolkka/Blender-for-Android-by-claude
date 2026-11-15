@@ -85,6 +85,10 @@ CI에서도 매 빌드마다 실행됩니다.
   extensions.blender.org 목록 동기화(HTTPS) 확인
 - MCP 서버 종단 간 테스트 (`tests/qemu/mcp_test.py`): 최신(2026-07-28)·구버전(2025-06-18) 프로토콜,
   `execute_python`(NumPy로 메시 생성), 씬·오브젝트 정보, Cycles 렌더 이미지 반환, .blend 저장 — **통과**
+- MCP 서버 단위 테스트 (`tests/mcp/test_mcp_host.py`, `test_mcp_addon.py`, 빌드 머신의 Python): 토큰 인증(헤더·URL 경로),
+  터널·프록시를 거친 긴 도구 호출의 백그라운드 실행과 `get_tool_result`, Cloudflare 터널 관리(주소 인식,
+  연결 상태, 오류, 토큰은 환경 변수로) — **통과**. Android용 `cloudflared`는 QEMU에서 실행 확인
+  (`--version`, 실제 터널 연결은 실기기에서)
 - 추가 구성 요소 (`tests/qemu/smoke_test.py`): 빌드된 USD Python 모듈 패키지를 파일에서 설치한 뒤
   `from pxr import Usd, UsdGeom`으로 스테이지 생성·저장, Blender의 USD 내보내기 결과 읽기 — **통과**
 
@@ -101,7 +105,8 @@ GPU(Vulkan) 경로와 터치·펜 입력은 에뮬레이션으로 확인할 수 
   **NumPy 2.3**, requests, certifi, cattrs, autopep8 등 / `aud`(오디오) 모듈
 - **확장(Extensions)**: extensions.blender.org에서 애드온 검색·설치 (환경설정 → 시스템 → 네트워크에서 온라인 접근 허용),
   원격 에셋 라이브러리·온라인 Essentials
-- **Claude 연동**: 내장 MCP 서버 애드온 — Claude Code나 Claude 앱이 Blender Python API를 사용 (아래 참고)
+- **Claude 연동**: 내장 MCP 서버 애드온 — Claude Code나 Claude 앱이 Blender Python API를 사용,
+  Claude 앱 커넥터용 HTTPS 주소는 내장 Cloudflare 터널로 (아래 참고)
 - **입출력**: .blend, OBJ, PLY, STL, FBX, glTF/GLB(Draco·meshoptimizer 압축), Alembic, USD(MaterialX), SVG,
   Grease Pencil PDF / 이미지(PNG, JPEG, EXR, TIFF, WebP, JPEG2000 …)
 - **동영상 (FFmpeg)**: 공식 릴리스와 같은 코덱 — H.264(x264), H.265(x265), VP9, AV1, Theora / AAC, Opus, Vorbis,
@@ -218,10 +223,41 @@ API로 모델링·머티리얼·애니메이션·렌더링을 직접 수행합�
 | Claude Code (같은 기기, 예: Termux) | **Copy Claude Code Command** 버튼으로 복사한 명령 실행:<br>`claude mcp add --transport http blender http://127.0.0.1:8765/mcp --header "Authorization: Bearer <토큰>"` |
 | Claude Code (PC, USB 연결) | `adb forward tcp:8765 tcp:8765` 후 위와 같은 명령 |
 | Claude Code (PC, 같은 Wi-Fi) | **Allow Network Access**를 켜고 패널에 표시된 휴대폰 IP 주소로 연결 |
-| Claude 앱 (모바일·웹, 사용자 지정 커넥터) | 커넥터에는 인터넷에서 접근 가능한 HTTPS 주소가 필요합니다. 휴대폰에서 터널을 실행하고 (예: Termux에서 `cloudflared tunnel --url http://127.0.0.1:8765`), **Copy URL with Token**으로 복사한 주소의 `http://127.0.0.1:8765` 부분을 터널 주소로 바꾼 `https://<터널 주소>/mcp/<토큰>`을 커넥터로 추가 |
+| Claude 앱 (모바일·웹·데스크톱, 사용자 지정 커넥터) | 아래 **Claude 앱 커넥터 (HTTPS)** 참고: Blender에 포함된 Cloudflare 터널이 `https://…/mcp/<토큰>` 주소를 만들어 줍니다 |
+
+### Claude 앱 커넥터 (HTTPS)
+
+Claude 앱(모바일·웹·데스크톱)의 **사용자 지정 커넥터**는 Anthropic 서버가 인터넷을 통해 **HTTPS**로만
+접속하므로 `http://127.0.0.1:8765` 같은 주소는 쓸 수 없습니다. Blender for Android에는 Cloudflare Tunnel
+클라이언트(`cloudflared`)가 들어 있어서, 휴대폰이 Cloudflare로 바깥 연결을 만들고 공개 HTTPS 주소를
+받습니다. 포트 포워딩이나 인증서가 필요 없고 모바일 데이터에서도 동작합니다.
+
+1. MCP 패널의 **Claude App Connector (HTTPS)**에서 방식을 고릅니다.
+   - **Quick Tunnel**: 계정 없이 바로 사용할 수 있습니다. 주소(`https://<임의의 단어>.trycloudflare.com`)가
+     서버를 시작할 때마다 바뀌므로 커넥터 URL도 다시 넣어야 합니다.
+   - **Cloudflare Tunnel**: 주소가 고정됩니다 (무료 Cloudflare 계정과 Cloudflare에 연결된 도메인 필요).
+     Cloudflare 대시보드(Zero Trust → Networks → Tunnels)에서 터널을 만들고, Public Hostname
+     (예: `blender.example.com`)의 서비스를 `http://localhost:8765`로 지정합니다. 커넥터 설치 명령의
+     `--token` 뒤의 값을 **Tunnel Token**에, 호스트 이름을 **Public Host Name**에 입력합니다.
+   - **Custom URL**: 직접 운영하는 HTTPS 터널이나 리버스 프록시의 주소 (Tailscale Funnel, ngrok 등).
+2. **Start MCP Server** → "Connected"가 표시되면 **Copy Connector URL**
+   (`https://<주소>/mcp/<토큰>`, 토큰이 들어 있습니다).
+3. Claude 앱: **설정 → 커넥터 → 사용자 지정 커넥터 추가**에 붙여넣습니다 (OAuth 항목은 비워 둡니다).
+
+- URL에 토큰이 들어 있으니 **URL을 가진 사람은 누구나 Blender에서 코드를 실행할 수 있습니다.**
+  공유하지 말고, 노출됐다면 **New Token**으로 바꾼 뒤 커넥터 URL을 다시 넣으세요 (터널 주소는 유지됩니다).
+- Cloudflare는 100초 안에 응답이 없는 요청을 끊습니다. 터널이나 프록시를 거친 요청에서 50초 넘게 걸리는
+  도구(긴 렌더링 등)는 Blender에서 계속 실행되고, Claude는 `get_tool_result` 도구로 결과를 받습니다.
+- 서버가 실행되는 동안에만 연결됩니다 (백그라운드에서도 동작). Quick Tunnel은 Cloudflare의 체험용
+  서비스로 가동 보장이 없습니다.
+- `cloudflared`는 Cloudflare의 오픈 소스 프로그램입니다 (Apache License 2.0, APK의 `assets/licenses`).
+
+PC나 서버의 Blender에서는 `cloudflared`가 `PATH`에 있으면 같은 기능을 쓸 수 있습니다
+(백그라운드 모드: `mcp_server.serve_forever(port=8765, public='QUICK')`).
 
 제공 도구: `execute_python`(bpy·mathutils·NumPy, 변수 유지), `get_scene_info`, `get_object_info`,
-`get_viewport_screenshot`(뷰포트 화면 이미지), `render_image`(렌더 결과 이미지), `save_blend_file`.
+`get_viewport_screenshot`(뷰포트 화면 이미지), `render_image`(렌더 결과 이미지), `save_blend_file`,
+`get_tool_result`(오래 걸린 도구의 결과).
 서버가 Claude에게 주는 안내문에 추가 구성 요소 설치 방법(`android_components`)도 포함되어 있어, 필요하면 Claude가
 USD Python 모듈이나 Python 패키지를 직접 설치해 사용할 수 있습니다.
 PC나 서버의 Blender에서도 같은 애드온을 쓸 수 있습니다:
@@ -237,9 +273,11 @@ PC나 서버의 Blender에서도 같은 애드온을 쓸 수 있습니다:
 - 패키지:
   ```sh
   sudo apt install build-essential cmake ninja-build git curl unzip zip patch python3 \
-    openjdk-17-jdk qemu-user-static autoconf automake libtool pkg-config flex bison
+    openjdk-17-jdk qemu-user-static autoconf automake libtool pkg-config flex bison golang
   ```
 - Android SDK/NDK는 스크립트가 자동으로 설치합니다 (NDK r29, SDK platform 35).
+- Go: `cloudflared`(MCP 서버의 HTTPS 주소, `scripts/build_cloudflared.sh`) 빌드에 사용합니다. 버전은 상관없습니다
+  (필요한 버전을 Go가 자동으로 받습니다).
 
 ### 한 번에 빌드
 
@@ -257,6 +295,7 @@ adb install -r _work/out/Blender-5.2.2-android-arm64-v8a.apk
 | `scripts/fetch_blender.sh` | Blender 5.2.2 소스 다운로드·검증, Android 패치 적용 | 1분 |
 | `scripts/build_deps.sh` | 의존성 약 75개 크로스 컴파일 (`deps/`), 바뀐 것만 다시 빌드 | 약 3~4시간 (USD, LLVM 포함) |
 | `scripts/build_blender.sh` | Blender 크로스 컴파일 → `libblender.so` + 데이터 | 3~4시간 |
+| `scripts/build_cloudflared.sh` | Cloudflare Tunnel 클라이언트(`libcloudflared.so`) 빌드 (Go) | 1~2분 |
 | `scripts/package_apk.sh` | 데이터 압축, Gradle로 APK 생성 | 수 분 |
 | `scripts/build_components.sh` | 추가 구성 요소 빌드 (`components/`, `libblender.so`에 링크) → `_work/out/components` | 약 30분 |
 

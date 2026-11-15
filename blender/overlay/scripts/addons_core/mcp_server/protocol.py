@@ -25,7 +25,9 @@ import base64
 import hmac
 import http.server
 import json
+import secrets
 import threading
+import time
 import traceback
 import urllib.parse
 from collections.abc import Callable
@@ -48,6 +50,13 @@ HEADER_MISMATCH = -32020
 UNSUPPORTED_PROTOCOL_VERSION = -32022
 
 MAX_REQUEST_SIZE = 16 * 1024 * 1024
+
+# Headers of requests forwarded by a proxy or tunnel (Cloudflare ends requests without a response
+# after 100 seconds): long tool calls continue in the background, see `GET_RESULT_TOOL`.
+PROXY_HEADERS = ("cf-ray", "cdn-loop", "x-forwarded-for", "forwarded", "via")
+GET_RESULT_TOOL = "get_tool_result"
+# Tool calls continuing in the background that are kept (oldest results are dropped).
+MAX_PENDING_CALLS = 32
 
 
 class ToolError(Exception):
@@ -144,6 +153,9 @@ class Server:
        result, arguments: ``(function, timeout)``.
     :arg token: Required from clients, as ``Authorization: Bearer <token>`` header or as the
        last path component of the URL (``/mcp/<token>``, for clients that can't set headers).
+    :arg proxy_response_timeout: Seconds a request through a proxy or tunnel waits for a tool,
+       the tool then continues in the background and its result is returned by the
+       ``get_tool_result`` tool (requests without a response for a while are ended by proxies).
     """
 
     def __init__(
@@ -157,6 +169,7 @@ class Server:
             server_info: dict[str, str],
             instructions: str = "",
             tool_timeout: float = 600.0,
+            proxy_response_timeout: float = 50.0,
             log: Callable[[str], None] = print,
     ) -> None:
         if not token:
@@ -165,11 +178,32 @@ class Server:
         self.port = port
         self._token = token
         self._tools = {tool.name: tool for tool in tools}
+        self._tools[GET_RESULT_TOOL] = Tool(
+            GET_RESULT_TOOL,
+            (
+                "Get the result of a tool call that continued in Blender because it took long "
+                "(the call returned a job_id). Waits up to {:.0f} seconds, call again while it's "
+                "still running."
+            ).format(proxy_response_timeout),
+            {
+                "type": "object",
+                "properties": {"job_id": {"type": "string", "description": "Job of the tool call"}},
+                "required": ["job_id"],
+                "additionalProperties": False,
+            },
+            # Handled by the server (not on the main thread), see `_get_result`.
+            lambda arguments: [],
+            annotations={"readOnlyHint": True, "openWorldHint": False},
+        )
         self._executor = executor
         self._server_info = server_info
         self._instructions = instructions
         self._tool_timeout = tool_timeout
+        self._proxy_response_timeout = proxy_response_timeout
         self._log = log
+        # Tool calls continuing in the background: job identifier -> call.
+        self._pending: dict[str, _PendingCall] = {}
+        self._pending_lock = threading.Lock()
         self._httpd: http.server.ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -201,6 +235,17 @@ class Server:
     @property
     def is_running(self) -> bool:
         return self._httpd is not None
+
+    @property
+    def token(self) -> str:
+        return self._token
+
+    @token.setter
+    def token(self, value: str) -> None:
+        """Replace the token (clients using the previous one aren't authorized anymore)."""
+        if not value:
+            raise ValueError("A token is required")
+        self._token = value
 
     # -------------------------------------------------------------------------
     # Authentication
@@ -251,14 +296,15 @@ class Server:
 
         meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
         modern_version = meta.get(META_PROTOCOL_VERSION)
+        wait = self._proxy_response_timeout if any(name in headers for name in PROXY_HEADERS) else None
         try:
             if modern_version is not None:
                 self._check_modern_headers(method, params, modern_version, headers)
-                result = self._dispatch_modern(method, params)
+                result = self._dispatch_modern(method, params, wait)
                 result.setdefault("resultType", "complete")
             else:
                 self._check_legacy_headers(method, headers)
-                result = self._dispatch_legacy(method, params)
+                result = self._dispatch_legacy(method, params, wait)
         except _RPCError as ex:
             return ex.http_status, _error_response(request_id, ex.code, ex.message, ex.data)
         except Exception as ex:
@@ -329,7 +375,7 @@ class Server:
     def _capabilities(self) -> dict[str, Any]:
         return {"tools": {"listChanged": False}}
 
-    def _dispatch_modern(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _dispatch_modern(self, method: str, params: dict[str, Any], wait: float | None) -> dict[str, Any]:
         if method == "server/discover":
             result: dict[str, Any] = {
                 "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
@@ -344,10 +390,10 @@ class Server:
         if method == "tools/list":
             return {"tools": [tool.as_dict() for tool in self._tools.values()]}
         if method == "tools/call":
-            return self._call_tool(params)
+            return self._call_tool(params, wait)
         raise _RPCError(METHOD_NOT_FOUND, "Method not found: {!r}".format(method), http_status=404)
 
-    def _dispatch_legacy(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _dispatch_legacy(self, method: str, params: dict[str, Any], wait: float | None) -> dict[str, Any]:
         if method == "initialize":
             requested = params.get("protocolVersion")
             version = requested if requested in LEGACY_PROTOCOL_VERSIONS else LEGACY_PROTOCOL_VERSIONS[0]
@@ -364,13 +410,17 @@ class Server:
         if method == "tools/list":
             return {"tools": [tool.as_dict() for tool in self._tools.values()]}
         if method == "tools/call":
-            return self._call_tool(params)
+            return self._call_tool(params, wait)
         if method in {"resources/list", "resources/templates/list", "prompts/list"}:
             # Not advertised, answer anyway for clients that ask.
             return {method.split("/")[0] if method != "resources/templates/list" else "resourceTemplates": []}
         raise _RPCError(METHOD_NOT_FOUND, "Method not found: {!r}".format(method))
 
-    def _call_tool(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _call_tool(self, params: dict[str, Any], wait: float | None = None) -> dict[str, Any]:
+        """
+        :arg wait: Seconds to wait for the result, then the tool continues in the background
+           (``get_tool_result``), no limit when None.
+        """
         name = params.get("name")
         tool = self._tools.get(name) if isinstance(name, str) else None
         if tool is None:
@@ -379,7 +429,39 @@ class Server:
         if not isinstance(arguments, dict):
             raise _RPCError(INVALID_PARAMS, "Invalid tool arguments")
         _check_arguments(tool, arguments)
+        if name == GET_RESULT_TOOL:
+            return self._get_result(arguments["job_id"], self._proxy_response_timeout if wait is None else wait)
+        if wait is None:
+            return self._run_tool(tool, arguments)
 
+        call = _PendingCall(name)
+        thread = threading.Thread(target=call.run, args=(lambda: self._run_tool(tool, arguments),),
+                                  name="MCPTool", daemon=True)
+        thread.start()
+        if call.done.wait(wait):
+            return call.result
+        job_id = secrets.token_hex(6)
+        with self._pending_lock:
+            self._pending[job_id] = call
+            # Drop the oldest calls (finished first).
+            while len(self._pending) > MAX_PENDING_CALLS:
+                finished = [key for key, value in self._pending.items() if value.done.is_set()]
+                del self._pending[(finished or list(self._pending))[0]]
+        return _still_running(name, job_id, wait)
+
+    def _get_result(self, job_id: str, wait: float) -> dict[str, Any]:
+        with self._pending_lock:
+            call = self._pending.get(job_id)
+        if call is None:
+            return {"content": [{"type": "text", "text": "Unknown job_id {!r} (its result was already returned, "
+                                 "or it's too old)".format(job_id)}], "isError": True}
+        if not call.done.wait(wait):
+            return _still_running(call.name, job_id, time.monotonic() - call.started)
+        with self._pending_lock:
+            self._pending.pop(job_id, None)
+        return call.result
+
+    def _run_tool(self, tool: Tool, arguments: dict[str, Any]) -> dict[str, Any]:
         try:
             content = self._executor(lambda: tool.function(arguments), self._tool_timeout)
         except ToolError as ex:
@@ -395,6 +477,34 @@ class Server:
         except Exception:
             return {"content": [{"type": "text", "text": traceback.format_exc()}], "isError": True}
         return {"content": content, "isError": False}
+
+
+class _PendingCall:
+    """A tool call that may continue after its request returned."""
+    __slots__ = ("name", "started", "done", "result")
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.started = time.monotonic()
+        self.done = threading.Event()
+        self.result: dict[str, Any] = {}
+
+    def run(self, function: Callable[[], dict[str, Any]]) -> None:
+        try:
+            self.result = function()
+        except BaseException:
+            self.result = {"content": [{"type": "text", "text": traceback.format_exc()}], "isError": True}
+        self.done.set()
+
+
+def _still_running(name: str, job_id: str, elapsed: float) -> dict[str, Any]:
+    return {
+        "content": [{"type": "text", "text": (
+            "The tool {!r} is still running in Blender ({:.0f} seconds so far), it continues in the "
+            "background. Call the tool {!r} with job_id {!r} to get its result."
+        ).format(name, elapsed, GET_RESULT_TOOL, job_id)}],
+        "isError": False,
+    }
 
 
 def _error_response(request_id: Any, code: int, message: str, data: Any = None) -> dict[str, Any]:
