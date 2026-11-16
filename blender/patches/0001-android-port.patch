@@ -1471,7 +1471,7 @@ index 2f9cf83..9572d03 100644
      if(DEFINED LIBDIR)
        add_definitions(-DARCH_HAS_GNU_STL_EXTENSIONS)
 diff --git a/source/blender/windowmanager/intern/wm_window.cc b/source/blender/windowmanager/intern/wm_window.cc
-index 4c0aa2c..14a8b87 100644
+index 4c0aa2c..d9af66d 100644
 --- a/source/blender/windowmanager/intern/wm_window.cc
 +++ b/source/blender/windowmanager/intern/wm_window.cc
 @@ -47,6 +47,12 @@
@@ -1487,7 +1487,80 @@ index 4c0aa2c..14a8b87 100644
  #include "BKE_blender_version.h"
  #include "BKE_context.hh"
  #include "BKE_global.hh"
-@@ -2266,6 +2272,77 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
+@@ -991,6 +997,47 @@ static void wm_window_ensure_eventstate(wmWindow *win)
+ 
+ static bool wm_window_update_size_position(wmWindow *win);
+ 
++#ifdef __ANDROID__
++/**
++ * Explains why Blender closes when its window can't be created at startup: no GPU back-end (the
++ * device's Vulkan driver doesn't meet Blender's requirements) or no Vulkan context for the window.
++ * Otherwise Blender would quit without explanation, the reason only being in the system log.
++ * Blender exits when it has no window (see #WM_init), Android has a single window: opening another
++ * one fails without consequences.
++ */
++static void wm_android_gpu_unsupported_message(const wmWindowManager *wm,
++                                               const bool no_gpu_backend)
++{
++  for (const wmWindow &win_iter : wm->windows) {
++    if (win_iter.runtime->ghostwin != nullptr) {
++      return;
++    }
++  }
++  static bool shown = false;
++  if (shown) {
++    return;
++  }
++  shown = true;
++
++  std::string title = "Blender - ";
++  title += CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER, "Platform Unsupported");
++  std::string message = CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER,
++                                   "Your graphics card or driver version is not supported.");
++  message += "\n\n";
++  message += no_gpu_backend ?
++                 "The device's Vulkan driver doesn't provide all the features Blender needs." :
++                 "Unable to create the Vulkan context of the window.";
++  message += " (adb logcat -s Blender)\n\n";
++  message += CTX_IFACE_(
++      BLT_I18NCONTEXT_ID_WINDOWMANAGER,
++      "Newer graphics drivers might be available with better Blender compatibility.");
++  message += "\n\n";
++  message += CTX_IFACE_(BLT_I18NCONTEXT_ID_WINDOWMANAGER, "Blender will now close.");
++  printf("Android: %s\n%s\n", title.c_str(), message.c_str());
++  WM_ghost_show_message_box(title.c_str(), message.c_str(), "", "Exit", "", GHOST_DialogError);
++}
++#endif
++
+ /* Belongs to below. */
+ static void wm_window_ghostwindow_add(wmWindowManager *wm,
+                                       const char *title,
+@@ -1008,6 +1055,14 @@ static void wm_window_ghostwindow_add(wmWindowManager *wm,
+   }
+ 
+   GPUBackendType gpu_backend = GPU_backend_type_selection_get();
++#ifdef __ANDROID__
++  if (gpu_backend == GPU_BACKEND_NONE) {
++    /* Nothing could be drawn, and the GPU module can't be initialized with the dummy back-end
++     * (#GPU_init would crash). */
++    wm_android_gpu_unsupported_message(wm, true);
++    return;
++  }
++#endif
+   gpu_settings.context_type = wm_ghost_drawing_context_type(gpu_backend);
+   gpu_settings.preferred_device = GPU_backend_preferred_device_get();
+   if (GPU_backend_vsync_is_overridden()) {
+@@ -1091,6 +1146,9 @@ static void wm_window_ghostwindow_add(wmWindowManager *wm,
+     GPU_render_end();
+   }
+   else {
++#ifdef __ANDROID__
++    wm_android_gpu_unsupported_message(wm, false);
++#endif
+     if (prev_windrawable != nullptr) {
+       wm_window_set_drawable(wm, prev_windrawable, false);
+     }
+@@ -2266,6 +2324,77 @@ const GHOST_CSD_Layout *WM_window_csd_layout_get()
  
  #endif /* WITH_GHOST_CSD */
  
@@ -1565,7 +1638,7 @@ index 4c0aa2c..14a8b87 100644
  void wm_ghost_init(bContext *C)
  {
    if (g_system) {
-@@ -2283,6 +2360,9 @@ void wm_ghost_init(bContext *C)
+@@ -2283,6 +2412,9 @@ void wm_ghost_init(bContext *C)
    GHOST_ISystem::createSystem();
    g_system = GHOST_ISystem::getSystem();
    GPU_backend_ghost_system_set(g_system);

@@ -1,9 +1,11 @@
 package com.github.sakkijarvenpolkka.blender;
 
 import android.Manifest;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -135,6 +137,51 @@ public class BlenderActivity extends SDLActivity {
                 BackgroundService.stop(this);
             }
         });
+    }
+
+    /**
+     * Blender's native dialogs (`GHOST_SystemAndroid::showMessageBox`, e.g. "Platform Unsupported"
+     * when the device's Vulkan driver doesn't meet Blender's requirements), with the standard
+     * dialog layout: SDL's own layout doesn't scroll (with large fonts its buttons can end up out of
+     * view) and can't be dismissed. SDL's thread waits until the dialog is dismissed.
+     */
+    @Override
+    protected void messageboxCreateAndShow(Bundle args) {
+        String[] buttonTexts = args.getStringArray("buttonTexts");
+        int[] buttonIds = args.getIntArray("buttonIds");
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(args.getString("title"))
+                .setMessage(args.getString("message"));
+        // Up to three buttons in the standard layout, the last one (Blender's default) is the
+        // positive button. Back dismisses the dialog without a selection (like the default).
+        int count = (buttonTexts == null || buttonIds == null)
+                ? 0 : Math.min(3, Math.min(buttonTexts.length, buttonIds.length));
+        for (int i = 0; i < count; i++) {
+            final int id = buttonIds[i];
+            DialogInterface.OnClickListener listener = (dialog, which) -> messageboxSelection[0] = id;
+            if (i == count - 1) {
+                builder.setPositiveButton(buttonTexts[i], listener);
+            } else if (i == 0) {
+                builder.setNeutralButton(buttonTexts[i], listener);
+            } else {
+                builder.setNegativeButton(buttonTexts[i], listener);
+            }
+        }
+        AlertDialog dialog = builder.create();
+        dialog.setCanceledOnTouchOutside(false);
+        dialog.setOnDismissListener(unused -> {
+            synchronized (messageboxSelection) {
+                messageboxSelection.notify();
+            }
+        });
+        try {
+            dialog.show();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Unable to show the message: " + args.getString("title"), e);
+            synchronized (messageboxSelection) {
+                messageboxSelection.notify();
+            }
+        }
     }
 
     @Override
