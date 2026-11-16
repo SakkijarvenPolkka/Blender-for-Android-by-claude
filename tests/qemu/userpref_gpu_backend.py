@@ -8,6 +8,7 @@ desktop Blender and was stored by earlier builds of the Android port, which only
   userpref_gpu_backend.py <userpref.blend>                       # print the stored value
   userpref_gpu_backend.py <userpref.blend> <value>               # change it (1: OpenGL, 2: Metal, 8: Vulkan)
   userpref_gpu_backend.py <userpref.blend> <value> --version 304 # also mark the file as written by 3.4
+  userpref_gpu_backend.py <userpref.blend> --expect 8 [...]      # fail unless the stored value is 8
 
 Also usable as a module (`read_gpu_backend()`, `write_gpu_backend()`, `set_file_version()`), e.g.
 from Blender's Python. Supports uncompressed little-endian blend-files with 8-byte pointers (how
@@ -153,24 +154,28 @@ def set_file_version(path, version):
 
 def main():
     args = sys.argv[1:]
-    version = None
-    if "--version" in args:
-        index = args.index("--version")
-        version = int(args[index + 1])
-        del args[index:index + 2]
+    options = {}
+    for option in ("--version", "--expect"):
+        if option in args:
+            index = args.index(option)
+            options[option] = int(args[index + 1])
+            del args[index:index + 2]
     if len(args) not in {1, 2}:
         sys.exit(__doc__)
     path = args[0]
     try:
         value = read_gpu_backend(path)
         print("gpu_backend = {:d} ({:s})".format(value, BACKENDS.get(value, "unknown")))
+        # E.g. the value Blender saved: otherwise the offset is wrong (changes would go elsewhere).
+        if "--expect" in options and value != options["--expect"]:
+            sys.exit("{:s}: gpu_backend is {:d}, expected {:d}".format(path, value, options["--expect"]))
         if len(args) == 2:
             value = int(args[1])
             write_gpu_backend(path, value)
             print("gpu_backend set to {:d} ({:s})".format(value, BACKENDS.get(value, "unknown")))
-        if version is not None:
-            set_file_version(path, version)
-            print("file version set to {:d}".format(version))
+        if "--version" in options:
+            set_file_version(path, options["--version"])
+            print("file version set to {:d}".format(options["--version"]))
     except (OSError, BlendFileError) as ex:
         sys.exit("{:s}: {!s}".format(path, ex))
 

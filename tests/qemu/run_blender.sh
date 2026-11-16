@@ -82,9 +82,10 @@ run_gpu_backend_test() {
 }
 # Factory settings, saved for the next step.
 run_gpu_backend_test factory --factory-startup
-# Saved preferences selecting OpenGL.
+# Saved preferences selecting OpenGL (the value saved by Blender is Vulkan: the helper found the
+# right member).
 "${PYTHON:-python3}" -I "${REPO_DIR}/tests/qemu/userpref_gpu_backend.py" "${PREFS_DIR}/config/userpref.blend" 1 \
-  || die "Unable to change the GPU back-end of the saved preferences"
+  --expect 8 || die "Unable to change the GPU back-end of the saved preferences"
 run_gpu_backend_test saved
 log "GPU back-end preference: Vulkan"
 
